@@ -57,6 +57,8 @@ struct SchedulerMetrics
     int criticalDeadlineMisses{};
     int normalCycles{};
     long long lastWriteStartDelayMs{-1};
+    int writeCompletedCount{};
+    BridgeError lastWriteErrorCode{BridgeError::Ok};
 };
 
 class UpdateCoordinator
@@ -101,6 +103,8 @@ private:
     std::atomic<int> historyProgress_{0};
     std::atomic<bool> historyRunning_{false};
     std::atomic<long long> lastWriteStartDelayMs_{-1};
+    std::atomic<int> writeCompletedCount_{0};
+    std::atomic<int> lastWriteErrorCode_{static_cast<int>(BridgeError::Ok)};
 
     mutable std::mutex snapshotMutex_;
     UpdateSnapshot snapshot_;

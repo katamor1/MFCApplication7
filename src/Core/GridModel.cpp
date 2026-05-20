@@ -14,7 +14,12 @@ void GridModel::SetColumns(std::vector<std::wstring> columns)
 
 void GridModel::AddRow(std::vector<GridCell> cells)
 {
-    rows_.push_back({std::move(cells)});
+    AddRow(std::move(cells), {});
+}
+
+void GridModel::AddRow(std::vector<GridCell> cells, GridRowBinding binding)
+{
+    rows_.push_back({std::move(cells), binding});
 }
 
 void GridModel::ClearRows()

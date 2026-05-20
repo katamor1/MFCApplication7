@@ -79,8 +79,9 @@ GridModel BuildScheduleGrid(const DataGateway& gateway)
                 GridCell::Text(std::to_wstring(containerNo)),
                 GridCell::Text(ReadText(gateway, {2100, containerNo, itemNo, DataStyle::Raw})),
                 GridCell::Text(ReadText(gateway, {3000, containerNo, itemNo, DataStyle::Raw})),
-                GridCell::Text(ReadText(gateway, {2103, containerNo, itemNo, DataStyle::ThousandsSeparated}), CellKind::Spin),
-            });
+                GridCell::Text(ReadText(gateway, {2103, containerNo, itemNo, DataStyle::Raw}), CellKind::Spin),
+            },
+            {containerNo, itemNo});
         }
     }
     return grid;

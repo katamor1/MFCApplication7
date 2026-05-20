@@ -100,6 +100,12 @@ HRESULT SetLongResult(VARIANT* result, LONG value)
     return S_OK;
 }
 
+MockBackendBridge& SharedComBridge()
+{
+    static MockBackendBridge bridge(DataCatalog::CreateDefault());
+    return bridge;
+}
+
 int RunSelfTest()
 {
     auto catalog = DataCatalog::CreateDefault();
@@ -216,8 +222,6 @@ class ATL_NO_VTABLE CBackendBridge
 {
 public:
     CBackendBridge()
-        : catalog_(DataCatalog::CreateDefault())
-        , bridge_(catalog_)
     {
     }
 
@@ -233,7 +237,7 @@ public:
         if (errorCode == nullptr) {
             return E_POINTER;
         }
-        *errorCode = static_cast<LONG>(bridge_.Connect(ipAddress == nullptr ? L"" : std::wstring(ipAddress)));
+        *errorCode = static_cast<LONG>(SharedComBridge().Connect(ipAddress == nullptr ? L"" : std::wstring(ipAddress)));
         return S_OK;
     }
 
@@ -249,7 +253,7 @@ public:
         }
 
         std::wstring text;
-        const auto error = bridge_.Read({static_cast<int>(dataId), static_cast<int>(subId1), static_cast<int>(subId2), ToStyle(style)}, text);
+        const auto error = SharedComBridge().Read({static_cast<int>(dataId), static_cast<int>(subId1), static_cast<int>(subId2), ToStyle(style)}, text);
         SysFreeString(*value);
         *value = SysAllocString(text.c_str());
         *errorCode = static_cast<LONG>(error);
@@ -266,8 +270,8 @@ public:
             return S_OK;
         }
 
-        *errorCode = static_cast<LONG>(bridge_.Write({static_cast<int>(dataId), static_cast<int>(subId1), static_cast<int>(subId2), ToStyle(style)},
-                                                     value == nullptr ? L"" : std::wstring(value)));
+        *errorCode = static_cast<LONG>(SharedComBridge().Write({static_cast<int>(dataId), static_cast<int>(subId1), static_cast<int>(subId2), ToStyle(style)},
+                                                               value == nullptr ? L"" : std::wstring(value)));
         return S_OK;
     }
 
@@ -326,7 +330,7 @@ public:
             if (ipAddressArgument == nullptr || !VariantToString(*ipAddressArgument, ipAddress)) {
                 return DISP_E_TYPEMISMATCH;
             }
-            return SetLongResult(result, static_cast<LONG>(bridge_.Connect(ipAddress)));
+            return SetLongResult(result, static_cast<LONG>(SharedComBridge().Connect(ipAddress)));
         }
         case DispatchIdRead: {
             if (parameters == nullptr || parameters->cArgs != 5) {
@@ -363,7 +367,7 @@ public:
             }
 
             std::wstring text;
-            const auto error = bridge_.Read({static_cast<int>(dataId), static_cast<int>(subId1), static_cast<int>(subId2), ToStyle(style)}, text);
+            const auto error = SharedComBridge().Read({static_cast<int>(dataId), static_cast<int>(subId1), static_cast<int>(subId2), ToStyle(style)}, text);
             SysFreeString(*valueArgument->pbstrVal);
             *valueArgument->pbstrVal = SysAllocString(text.c_str());
             return SetLongResult(result, static_cast<LONG>(error));
@@ -399,17 +403,13 @@ public:
                 return SetLongResult(result, static_cast<LONG>(BridgeError::InvalidStyle));
             }
 
-            const auto error = bridge_.Write({static_cast<int>(dataId), static_cast<int>(subId1), static_cast<int>(subId2), ToStyle(style)}, value);
+            const auto error = SharedComBridge().Write({static_cast<int>(dataId), static_cast<int>(subId1), static_cast<int>(subId2), ToStyle(style)}, value);
             return SetLongResult(result, static_cast<LONG>(error));
         }
         default:
             return DISP_E_MEMBERNOTFOUND;
         }
     }
-
-private:
-    DataCatalog catalog_;
-    MockBackendBridge bridge_;
 };
 
 OBJECT_ENTRY_AUTO(__uuidof(BackendBridgeComClass), CBackendBridge)

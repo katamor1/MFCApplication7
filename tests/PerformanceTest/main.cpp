@@ -60,7 +60,9 @@ int wmain(int argc, wchar_t** argv)
     std::wcout << L"criticalCycles=" << metrics.criticalCycles << L"\n"
                << L"criticalDeadlineMisses=" << metrics.criticalDeadlineMisses << L"\n"
                << L"normalCycles=" << metrics.normalCycles << L"\n"
-               << L"lastWriteStartDelayMs=" << metrics.lastWriteStartDelayMs << L"\n";
+               << L"lastWriteStartDelayMs=" << metrics.lastWriteStartDelayMs << L"\n"
+               << L"writeCompletedCount=" << metrics.writeCompletedCount << L"\n"
+               << L"lastWriteErrorCode=" << static_cast<int>(metrics.lastWriteErrorCode) << L"\n";
 
     if (metrics.criticalCycles < expectedMinimumCriticalCycles) {
         std::wcerr << L"critical refresh cadence too slow\n";
@@ -73,6 +75,14 @@ int wmain(int argc, wchar_t** argv)
     if (metrics.lastWriteStartDelayMs < 0 || metrics.lastWriteStartDelayMs > 100) {
         std::wcerr << L"write start delay exceeded 100ms\n";
         return 4;
+    }
+    if (metrics.writeCompletedCount < 1) {
+        std::wcerr << L"write did not complete\n";
+        return 5;
+    }
+    if (metrics.lastWriteErrorCode != BridgeError::Ok) {
+        std::wcerr << L"write returned error\n";
+        return 6;
     }
     return 0;
 }

@@ -6,6 +6,24 @@
 
 namespace {
 
+struct ThreadComState
+{
+    ~ThreadComState()
+    {
+        bridge.Release();
+        if (initialized) {
+            CoUninitialize();
+        }
+    }
+
+    std::wstring progId;
+    bool initialized{false};
+    bool usable{false};
+    bool connected{false};
+    std::wstring connectedIpAddress;
+    ATL::CComPtr<IDispatch> bridge;
+};
+
 LONG ToStyleValue(DataStyle style)
 {
     return static_cast<LONG>(style);
@@ -64,28 +82,33 @@ void SetStringArgument(ATL::CComVariant& argument, const std::wstring& value)
 ComBackendBridge::ComBackendBridge(std::wstring progId)
     : progId_(std::move(progId))
 {
-    const auto hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    comInitialized_ = hr == S_OK || hr == S_FALSE;
-    comUsable_ = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
 }
 
 ComBackendBridge::~ComBackendBridge()
 {
-    bridge_.Release();
-    if (comInitialized_) {
-        CoUninitialize();
-    }
 }
 
 BridgeError ComBackendBridge::Connect(const std::wstring& ipAddress)
 {
-    const auto ensure = EnsureObject();
+    ATL::CComPtr<IDispatch> dispatch;
+    const auto ensure = EnsureObject(dispatch, false);
     if (ensure != BridgeError::Ok) {
         return ensure;
     }
 
+    const auto error = InvokeConnect(dispatch, ipAddress);
+    if (error == BridgeError::Ok) {
+        std::lock_guard<std::mutex> lock(connectionMutex_);
+        connectedIpAddress_ = ipAddress;
+        hasConnectedIpAddress_ = true;
+    }
+    return error;
+}
+
+BridgeError ComBackendBridge::InvokeConnect(IDispatch* dispatch, const std::wstring& ipAddress)
+{
     DISPID dispatchId{};
-    if (FAILED(ResolveDispatchId(bridge_, L"Connect", dispatchId))) {
+    if (dispatch == nullptr || FAILED(ResolveDispatchId(dispatch, L"Connect", dispatchId))) {
         return BridgeError::InternalError;
     }
 
@@ -93,20 +116,21 @@ BridgeError ComBackendBridge::Connect(const std::wstring& ipAddress)
     SetStringArgument(args[0], ipAddress);
     DISPPARAMS parameters{args, nullptr, 1, 0};
     ATL::CComVariant result;
-    const auto hr = bridge_->Invoke(dispatchId, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &parameters, &result, nullptr, nullptr);
+    const auto hr = dispatch->Invoke(dispatchId, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &parameters, &result, nullptr, nullptr);
     return FromDispatchResult(hr, result);
 }
 
 BridgeError ComBackendBridge::Read(const DataKey& key, std::wstring& value)
 {
-    const auto ensure = EnsureObject();
+    ATL::CComPtr<IDispatch> dispatch;
+    const auto ensure = EnsureObject(dispatch, true);
     if (ensure != BridgeError::Ok) {
         value.clear();
         return ensure;
     }
 
     DISPID dispatchId{};
-    if (FAILED(ResolveDispatchId(bridge_, L"Read", dispatchId))) {
+    if (FAILED(ResolveDispatchId(dispatch, L"Read", dispatchId))) {
         value.clear();
         return BridgeError::InternalError;
     }
@@ -122,7 +146,7 @@ BridgeError ComBackendBridge::Read(const DataKey& key, std::wstring& value)
 
     DISPPARAMS parameters{args, nullptr, 5, 0};
     ATL::CComVariant result;
-    const auto hr = bridge_->Invoke(dispatchId, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &parameters, &result, nullptr, nullptr);
+    const auto hr = dispatch->Invoke(dispatchId, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &parameters, &result, nullptr, nullptr);
     const auto error = FromDispatchResult(hr, result);
     if (error != BridgeError::Ok) {
         value.clear();
@@ -135,13 +159,14 @@ BridgeError ComBackendBridge::Read(const DataKey& key, std::wstring& value)
 
 BridgeError ComBackendBridge::Write(const DataKey& key, const std::wstring& value)
 {
-    const auto ensure = EnsureObject();
+    ATL::CComPtr<IDispatch> dispatch;
+    const auto ensure = EnsureObject(dispatch, true);
     if (ensure != BridgeError::Ok) {
         return ensure;
     }
 
     DISPID dispatchId{};
-    if (FAILED(ResolveDispatchId(bridge_, L"Write", dispatchId))) {
+    if (FAILED(ResolveDispatchId(dispatch, L"Write", dispatchId))) {
         return BridgeError::InternalError;
     }
 
@@ -154,30 +179,65 @@ BridgeError ComBackendBridge::Write(const DataKey& key, const std::wstring& valu
 
     DISPPARAMS parameters{args, nullptr, 5, 0};
     ATL::CComVariant result;
-    const auto hr = bridge_->Invoke(dispatchId, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &parameters, &result, nullptr, nullptr);
+    const auto hr = dispatch->Invoke(dispatchId, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &parameters, &result, nullptr, nullptr);
     return FromDispatchResult(hr, result);
 }
 
-BridgeError ComBackendBridge::EnsureObject()
+BridgeError ComBackendBridge::EnsureObject(ATL::CComPtr<IDispatch>& dispatch, bool connectIfNeeded)
 {
-    if (!comUsable_) {
+    thread_local ThreadComState state;
+    if (state.progId != progId_) {
+        state.bridge.Release();
+        state.progId = progId_;
+        state.connected = false;
+        state.connectedIpAddress.clear();
+    }
+
+    if (!state.initialized && !state.usable) {
+        const auto hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        state.initialized = hr == S_OK || hr == S_FALSE;
+        state.usable = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
+    }
+    if (!state.usable) {
         return BridgeError::InternalError;
     }
-    if (bridge_ != nullptr) {
-        return BridgeError::Ok;
+
+    if (state.bridge == nullptr) {
+        CLSID clsid{};
+        if (FAILED(CLSIDFromProgID(progId_.c_str(), &clsid))) {
+            return BridgeError::NotConnected;
+        }
+
+        ATL::CComPtr<IDispatch> created;
+        const auto hr = CoCreateInstance(clsid, nullptr, CLSCTX_LOCAL_SERVER, IID_IDispatch, reinterpret_cast<void**>(&created));
+        if (FAILED(hr) || created == nullptr) {
+            return BridgeError::NotConnected;
+        }
+
+        state.bridge = created;
+        state.connected = false;
+        state.connectedIpAddress.clear();
     }
 
-    CLSID clsid{};
-    if (FAILED(CLSIDFromProgID(progId_.c_str(), &clsid))) {
-        return BridgeError::NotConnected;
+    if (connectIfNeeded) {
+        std::wstring targetIpAddress;
+        {
+            std::lock_guard<std::mutex> lock(connectionMutex_);
+            if (!hasConnectedIpAddress_) {
+                return BridgeError::NotConnected;
+            }
+            targetIpAddress = connectedIpAddress_;
+        }
+        if (!state.connected || state.connectedIpAddress != targetIpAddress) {
+            const auto error = InvokeConnect(state.bridge, targetIpAddress);
+            if (error != BridgeError::Ok) {
+                return error;
+            }
+            state.connected = true;
+            state.connectedIpAddress = targetIpAddress;
+        }
     }
 
-    ATL::CComPtr<IDispatch> created;
-    const auto hr = CoCreateInstance(clsid, nullptr, CLSCTX_LOCAL_SERVER, IID_IDispatch, reinterpret_cast<void**>(&created));
-    if (FAILED(hr) || created == nullptr) {
-        return BridgeError::NotConnected;
-    }
-
-    bridge_ = created;
+    dispatch = state.bridge;
     return BridgeError::Ok;
 }

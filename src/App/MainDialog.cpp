@@ -1,5 +1,7 @@
 #include "MainDialog.h"
 
+#include "OrderEditDialog.h"
+
 #include <algorithm>
 #include <sstream>
 
@@ -116,6 +118,19 @@ void CMainDialog::OnFunctionCommand(UINT id)
         return;
     }
 
+    if (currentScreen_ == MainScreenId::Schedule) {
+        POSITION position = contentList_.GetFirstSelectedItemPosition();
+        const int selectedRow = position == nullptr ? -1 : contentList_.GetNextSelectedItem(position);
+        if (slot == 1) {
+            ShowScheduleDetails(selectedRow);
+            return;
+        }
+        if (slot == 2) {
+            ChangeScheduleOrder(selectedRow);
+            return;
+        }
+    }
+
     if ((currentScreen_ == MainScreenId::Station || currentScreen_ == MainScreenId::ContainerList) && slot == 1) {
         CString message;
         message.Format(L"コンテナ %d の詳細表示を開きます。", selectedContainerNo_);
@@ -221,6 +236,11 @@ void CMainDialog::RefreshUi(bool forceGrid)
         return;
     }
     const auto snapshot = coordinator_->Snapshot();
+    const auto metrics = coordinator_->Metrics();
+    if (metrics.writeCompletedCount != lastSeenWriteCompletedCount_) {
+        lastSeenWriteCompletedCount_ = metrics.writeCompletedCount;
+        forceGrid = true;
+    }
     RefreshStatus(snapshot);
     RefreshFunctions(snapshot);
     if (forceGrid) {
@@ -238,6 +258,8 @@ void CMainDialog::RefreshStatus(const UpdateSnapshot& snapshot)
          << L" / 通常更新: " << metrics.normalCycles;
     if (metrics.lastWriteStartDelayMs >= 0) {
         text << L" / 最終Write開始遅延: " << metrics.lastWriteStartDelayMs << L"ms";
+        text << L" / Write完了: " << metrics.writeCompletedCount;
+        text << L" / 最終Write結果: " << ToDisplayText(metrics.lastWriteErrorCode);
     }
     if (!snapshot.criticalValues.empty() && snapshot.criticalValues.front().errorCode != BridgeError::Ok) {
         text << L" / " << ToDisplayText(snapshot.criticalValues.front().errorCode);
@@ -324,6 +346,44 @@ void CMainDialog::PopulateStation(const StationSnapshot& snapshot)
                << L" / 順序 " << item.outboundOrder << L" / 作業 " << item.workTime << L"\r\n";
     }
     detailText_.SetWindowText(ToCString(detail.str()));
+}
+
+void CMainDialog::ShowScheduleDetails(int row)
+{
+    if (row < 0) {
+        return;
+    }
+
+    const auto binding = contentList_.RowBindingAt(row);
+    if (binding.containerNo <= 0 || binding.itemNo <= 0) {
+        return;
+    }
+
+    CString message;
+    message.Format(L"コンテナ %d / 品目 %d の詳細表示を開きます。", binding.containerNo, binding.itemNo);
+    AfxMessageBox(message, MB_OK | MB_ICONINFORMATION);
+}
+
+void CMainDialog::ChangeScheduleOrder(int row)
+{
+    if (row < 0 || coordinator_ == nullptr) {
+        return;
+    }
+
+    const auto binding = contentList_.RowBindingAt(row);
+    if (binding.containerNo <= 0 || binding.itemNo <= 0) {
+        return;
+    }
+
+    const std::wstring itemName(contentList_.GetItemText(row, 1).GetString());
+    const std::wstring currentOrder(contentList_.GetItemText(row, 3).GetString());
+    COrderEditDialog dialog(binding.containerNo, itemName, currentOrder, this);
+    if (dialog.DoModal() != IDOK) {
+        return;
+    }
+
+    coordinator_->RequestWrite({2103, binding.containerNo, binding.itemNo, DataStyle::Raw}, dialog.OrderText());
+    RefreshUi(false);
 }
 
 CString CMainDialog::ScreenTitle() const

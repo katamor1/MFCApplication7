@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <stdexcept>
+#include <utility>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -115,7 +116,12 @@ UpdateSnapshot UpdateCoordinator::Snapshot() const
 
 SchedulerMetrics UpdateCoordinator::Metrics() const noexcept
 {
-    return {criticalCycles_.load(), criticalDeadlineMisses_.load(), normalCycles_.load(), lastWriteStartDelayMs_.load()};
+    return {criticalCycles_.load(),
+            criticalDeadlineMisses_.load(),
+            normalCycles_.load(),
+            lastWriteStartDelayMs_.load(),
+            writeCompletedCount_.load(),
+            static_cast<BridgeError>(lastWriteErrorCode_.load())};
 }
 
 void UpdateCoordinator::CriticalLoop()
@@ -143,12 +149,15 @@ void UpdateCoordinator::CriticalLoop()
 
 void UpdateCoordinator::NormalLoop()
 {
+#ifdef _WIN32
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+#endif
     using namespace std::chrono;
     while (running_) {
         auto station = BuildStationSnapshot(gateway_, selectedContainerNo_.load());
         {
             std::lock_guard<std::mutex> lock(snapshotMutex_);
-            snapshot_.station = std::move(station);
+            std::swap(snapshot_.station, station);
         }
         ++normalCycles_;
         std::this_thread::sleep_for(milliseconds(500));
@@ -171,12 +180,17 @@ void UpdateCoordinator::WriteLoop()
 
         const auto delay = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - request.enqueuedAt).count();
         lastWriteStartDelayMs_ = delay;
-        gateway_.Write(request.key, request.value);
+        const auto error = gateway_.Write(request.key, request.value);
+        lastWriteErrorCode_ = static_cast<int>(error);
+        ++writeCompletedCount_;
     }
 }
 
 void UpdateCoordinator::HistoryLoop(int totalSteps)
 {
+#ifdef _WIN32
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
+#endif
     const int steps = totalSteps <= 0 ? 1 : totalSteps;
     for (int step = 1; running_ && step <= steps; ++step) {
         std::wstring ignored;

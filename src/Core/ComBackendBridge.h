@@ -4,6 +4,8 @@
 
 #include <atlbase.h>
 
+#include <mutex>
+
 class ComBackendBridge final : public IBackendBridge
 {
 public:
@@ -15,10 +17,11 @@ public:
     BridgeError Write(const DataKey& key, const std::wstring& value) override;
 
 private:
-    BridgeError EnsureObject();
+    BridgeError EnsureObject(ATL::CComPtr<IDispatch>& dispatch, bool connectIfNeeded);
+    BridgeError InvokeConnect(IDispatch* dispatch, const std::wstring& ipAddress);
 
     std::wstring progId_;
-    bool comUsable_{false};
-    bool comInitialized_{false};
-    ATL::CComPtr<IDispatch> bridge_;
+    mutable std::mutex connectionMutex_;
+    std::wstring connectedIpAddress_;
+    bool hasConnectedIpAddress_{false};
 };

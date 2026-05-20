@@ -83,12 +83,14 @@
     <ClInclude Include="MFCApplication7App.h" />
     <ClInclude Include="CustomGridCtrl.h" />
     <ClInclude Include="MainDialog.h" />
+    <ClInclude Include="OrderEditDialog.h" />
     <ClInclude Include="resource.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="MFCApplication7App.cpp" />
     <ClCompile Include="CustomGridCtrl.cpp" />
     <ClCompile Include="MainDialog.cpp" />
+    <ClCompile Include="OrderEditDialog.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="MFCApplication7.rc" />

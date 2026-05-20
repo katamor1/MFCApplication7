@@ -21,9 +21,16 @@ struct GridCell
     static GridCell Text(std::wstring value, CellKind kind = CellKind::ReadOnlyText);
 };
 
+struct GridRowBinding
+{
+    int containerNo{};
+    int itemNo{};
+};
+
 struct GridRow
 {
     std::vector<GridCell> cells;
+    GridRowBinding binding;
 };
 
 class GridModel
@@ -31,6 +38,7 @@ class GridModel
 public:
     void SetColumns(std::vector<std::wstring> columns);
     void AddRow(std::vector<GridCell> cells);
+    void AddRow(std::vector<GridCell> cells, GridRowBinding binding);
     void ClearRows();
 
     size_t ColumnCount() const noexcept;

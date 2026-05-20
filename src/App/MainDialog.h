@@ -56,6 +56,8 @@ private:
     void PopulateCurrentScreen(const UpdateSnapshot& snapshot);
     void PopulateGrid(const GridModel& grid);
     void PopulateStation(const StationSnapshot& snapshot);
+    void ShowScheduleDetails(int row);
+    void ChangeScheduleOrder(int row);
     CString ScreenTitle() const;
 
     DataCatalog catalog_;
@@ -74,5 +76,6 @@ private:
     MainScreenId currentScreen_{MainScreenId::Station};
     bool navExpanded_{false};
     int selectedContainerNo_{1};
+    int lastSeenWriteCompletedCount_{0};
     unsigned int timerTicks_{0};
 };

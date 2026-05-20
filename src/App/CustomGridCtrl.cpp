@@ -44,3 +44,11 @@ CellKind CCustomGridCtrl::CellKindAt(int row, int column) const
     }
     return cells[column].kind;
 }
+
+GridRowBinding CCustomGridCtrl::RowBindingAt(int row) const
+{
+    if (row < 0 || row >= static_cast<int>(model_.Rows().size())) {
+        return {};
+    }
+    return model_.Rows()[row].binding;
+}

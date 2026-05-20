@@ -13,6 +13,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -126,6 +127,22 @@ void TestFunctionActionsReflectSelection()
     Check(!missing[0].enabled, "details should be disabled for missing container");
 }
 
+void TestScheduleFunctionActionsExposeOrderChangeOnlyForSelection()
+{
+    const auto none = BuildScheduleFunctionActions(false);
+    Check(none.size() == 8, "schedule actions should always expose 8 slots");
+    Check(!none[0].enabled, "schedule details should be disabled without selection");
+    Check(!none[1].enabled, "schedule order change should be disabled without selection");
+    Check(!none[2].enabled, "schedule add should stay disabled in V1");
+    Check(!none[3].enabled, "schedule delete should stay disabled in V1");
+
+    const auto selected = BuildScheduleFunctionActions(true);
+    Check(selected[0].enabled && selected[0].id == L"details", "schedule details should be enabled with selection");
+    Check(selected[1].enabled && selected[1].id == L"order-change", "schedule F2 should edit order with selection");
+    Check(selected[1].label == L"順序変更", "schedule F2 should be labeled for order change");
+    Check(!selected[2].enabled && !selected[3].enabled, "schedule add/delete should stay disabled in V1");
+}
+
 void TestGridModelKeepsCellKinds()
 {
     GridModel grid;
@@ -138,6 +155,86 @@ void TestGridModelKeepsCellKinds()
     Check(grid.RowCount() == 1, "grid should keep row count");
     Check(grid.Rows()[0].cells[1].kind == CellKind::Spin, "grid should preserve spin cell kind");
     Check(grid.Rows()[0].cells[2].kind == CellKind::CheckBox, "grid should preserve checkbox cell kind");
+}
+
+void TestScheduleGridBindsRowsToContainerItems()
+{
+    auto catalog = DataCatalog::CreateDefault();
+    auto bridge = std::make_shared<MockBackendBridge>(catalog);
+    DataGateway gateway(bridge);
+    Check(gateway.Connect(L"127.0.0.1") == BridgeError::Ok, "gateway connect should succeed");
+
+    const auto grid = BuildScheduleGrid(gateway);
+    Check(grid.RowCount() > 0, "schedule grid should contain rows");
+    const auto& firstRow = grid.Rows().front();
+    Check(firstRow.binding.containerNo == 1, "first schedule row should bind container 1");
+    Check(firstRow.binding.itemNo == 1, "first schedule row should bind item 1");
+    Check(firstRow.cells.size() == 4, "schedule row should keep four cells");
+    Check(firstRow.cells[3].kind == CellKind::Spin, "schedule order cell should remain spin kind");
+}
+
+void TestMockWriteUpdatesScheduleOrderReadback()
+{
+    auto catalog = DataCatalog::CreateDefault();
+    auto bridge = std::make_shared<MockBackendBridge>(catalog);
+    DataGateway gateway(bridge);
+    Check(gateway.Connect(L"127.0.0.1") == BridgeError::Ok, "gateway connect should succeed");
+
+    const DataKey orderKey{2103, 1, 1, DataStyle::Raw};
+    Check(gateway.Write(orderKey, L"4321") == BridgeError::Ok, "writable schedule order should accept write");
+    const auto value = gateway.Read(orderKey);
+    Check(value.errorCode == BridgeError::Ok, "written schedule order should read back");
+    Check(value.displayText == L"4321", "written schedule order should preserve new value");
+}
+
+bool WaitForWriteCount(const UpdateCoordinator& coordinator, int minimumCount)
+{
+    for (int attempt = 0; attempt < 50; ++attempt) {
+        if (coordinator.Metrics().writeCompletedCount >= minimumCount) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
+}
+
+void TestUpdateCoordinatorRecordsSuccessfulWriteMetrics()
+{
+    auto catalog = DataCatalog::CreateDefault();
+    auto bridge = std::make_shared<MockBackendBridge>(catalog);
+    DataGateway gateway(bridge);
+    Check(gateway.Connect(L"127.0.0.1") == BridgeError::Ok, "gateway connect should succeed");
+
+    UpdateCoordinator coordinator(catalog, gateway);
+    coordinator.Start();
+    coordinator.RequestWrite({2103, 1, 1, DataStyle::Raw}, L"6789");
+    Check(WaitForWriteCount(coordinator, 1), "coordinator should complete queued write");
+    coordinator.Stop();
+
+    const auto metrics = coordinator.Metrics();
+    Check(metrics.writeCompletedCount == 1, "coordinator should record one write completion");
+    Check(metrics.lastWriteErrorCode == BridgeError::Ok, "coordinator should record successful write error code");
+    Check(metrics.lastWriteStartDelayMs >= 0 && metrics.lastWriteStartDelayMs <= 100, "write should start within 100ms");
+    const auto value = gateway.Read({2103, 1, 1, DataStyle::Raw});
+    Check(value.displayText == L"6789", "coordinator write should update backend value");
+}
+
+void TestUpdateCoordinatorRecordsReadOnlyWriteError()
+{
+    auto catalog = DataCatalog::CreateDefault();
+    auto bridge = std::make_shared<MockBackendBridge>(catalog);
+    DataGateway gateway(bridge);
+    Check(gateway.Connect(L"127.0.0.1") == BridgeError::Ok, "gateway connect should succeed");
+
+    UpdateCoordinator coordinator(catalog, gateway);
+    coordinator.Start();
+    coordinator.RequestWrite({2000, 1, 0, DataStyle::Raw}, L"99");
+    Check(WaitForWriteCount(coordinator, 1), "coordinator should complete read-only write attempt");
+    coordinator.Stop();
+
+    const auto metrics = coordinator.Metrics();
+    Check(metrics.writeCompletedCount == 1, "coordinator should count failed write completion");
+    Check(metrics.lastWriteErrorCode == BridgeError::ReadOnly, "coordinator should preserve read-only write error");
 }
 
 void TestPriorityQueueOrdersCriticalBeforeNormalAndHistory()
@@ -180,7 +277,12 @@ int wmain()
         TestMockBridgeFormatsValuesAndRejectsInvalidStyle,
         TestGatewayMarksErrorsAsStale,
         TestFunctionActionsReflectSelection,
+        TestScheduleFunctionActionsExposeOrderChangeOnlyForSelection,
         TestGridModelKeepsCellKinds,
+        TestScheduleGridBindsRowsToContainerItems,
+        TestMockWriteUpdatesScheduleOrderReadback,
+        TestUpdateCoordinatorRecordsSuccessfulWriteMetrics,
+        TestUpdateCoordinatorRecordsReadOnlyWriteError,
         TestPriorityQueueOrdersCriticalBeforeNormalAndHistory,
         TestScreenSnapshotBuildsContainerSummary,
     };

@@ -21,12 +21,14 @@ class DataCatalog
 {
 public:
     static DataCatalog CreateDefault();
+    static DataCatalog LoadFromFile(const std::wstring& path);
 
     const std::vector<DataDefinition>& Definitions() const noexcept;
     const std::vector<DataKey>& CriticalKeys() const noexcept;
     const DataDefinition* FindDefinition(int dataId) const noexcept;
     bool IsStyleAllowed(int dataId, DataStyle style) const noexcept;
     BridgeError ValidateKey(const DataKey& key) const noexcept;
+    bool IsWritable(int dataId) const noexcept;
 
 private:
     void AddDefinition(DataDefinition definition);

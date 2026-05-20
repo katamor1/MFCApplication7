@@ -5,6 +5,7 @@
 #include "MockBackendBridge.h"
 #include "ScreenModels.h"
 #include "UpdateScheduler.h"
+#include "BridgeFactory.h"
 
 #include <chrono>
 #include <exception>
@@ -30,6 +31,50 @@ void TestCatalogDefinesCriticalDataAndStyles()
     Check(catalog.IsStyleAllowed(1000, DataStyle::Raw), "critical raw style should be allowed");
     Check(catalog.IsStyleAllowed(1010, DataStyle::ThousandsSeparated), "number style should be allowed");
     Check(!catalog.IsStyleAllowed(1000, DataStyle::MillimetersToInches), "invalid critical style should be rejected");
+}
+
+void TestCatalogLoadsFromJsonFile()
+{
+    const auto catalog = DataCatalog::LoadFromFile(L"config/data_catalog.json");
+    Check(catalog.Definitions().size() == 31, "json catalog should include 31 definitions");
+    Check(catalog.CriticalKeys().size() == 20, "json catalog should include 20 critical keys");
+    Check(catalog.FindDefinition(2001)->writable, "container name should be writable");
+    Check(catalog.IsStyleAllowed(2104, DataStyle::SecondsToHhMmSs), "work time should allow hhmmss style");
+}
+
+void TestCatalogRejectsInvalidJsonFile()
+{
+    bool failed = false;
+    try {
+        DataCatalog::LoadFromFile(L"tests/CoreTests/invalid_data_catalog.json");
+    } catch (const std::exception&) {
+        failed = true;
+    }
+    Check(failed, "invalid catalog json should throw");
+}
+
+void TestCatalogRejectsUnknownStyleName()
+{
+    bool failed = false;
+    try {
+        DataCatalog::LoadFromFile(L"tests/CoreTests/invalid_style_catalog.json");
+    } catch (const std::exception&) {
+        failed = true;
+    }
+    Check(failed, "unknown catalog style should throw");
+}
+
+void TestBridgeFactoryCreatesMockBridge()
+{
+    BridgeFactoryOptions options;
+    options.bridgeMode = BridgeMode::InProcessMock;
+    options.catalogPath = L"config/data_catalog.json";
+    auto bridge = CreateBackendBridge(options);
+    DataGateway gateway(bridge);
+    Check(gateway.Connect(options.ipAddress) == BridgeError::Ok, "factory mock bridge should connect");
+    const auto value = gateway.Read({1010, 0, 0, DataStyle::ThousandsSeparated});
+    Check(value.errorCode == BridgeError::Ok, "factory mock bridge should read formatted critical data");
+    Check(value.displayText.find(L",") != std::wstring::npos, "factory mock bridge should preserve formatting");
 }
 
 void TestMockBridgeFormatsValuesAndRejectsInvalidStyle()
@@ -128,6 +173,10 @@ int wmain()
 {
     const std::vector<void (*)()> tests = {
         TestCatalogDefinesCriticalDataAndStyles,
+        TestCatalogLoadsFromJsonFile,
+        TestCatalogRejectsInvalidJsonFile,
+        TestCatalogRejectsUnknownStyleName,
+        TestBridgeFactoryCreatesMockBridge,
         TestMockBridgeFormatsValuesAndRejectsInvalidStyle,
         TestGatewayMarksErrorsAsStale,
         TestFunctionActionsReflectSelection,

@@ -44,3 +44,5 @@ struct DataValue
 };
 
 std::wstring ToDisplayText(BridgeError error);
+std::wstring ToStyleName(DataStyle style);
+DataStyle ParseDataStyleName(const std::string& styleName);

@@ -42,10 +42,11 @@ BEGIN_MESSAGE_MAP(CMainDialog, CDialogEx)
     ON_NOTIFY(LVN_ITEMCHANGED, IDC_CONTENT_LIST, &CMainDialog::OnListItemChanged)
 END_MESSAGE_MAP()
 
-CMainDialog::CMainDialog()
+CMainDialog::CMainDialog(BridgeFactoryOptions options)
     : CDialogEx(IDD_MFCAPPLICATION7_DIALOG)
-    , catalog_(DataCatalog::CreateDefault())
-    , bridge_(std::make_shared<MockBackendBridge>(catalog_))
+    , catalog_(LoadConfiguredCatalogOrDefault(options.catalogPath))
+    , bridgeOptions_(std::move(options))
+    , bridge_(CreateBackendBridge(bridgeOptions_))
 {
 }
 
@@ -204,7 +205,7 @@ void CMainDialog::LayoutControls()
 void CMainDialog::ConnectAndStart()
 {
     DataGateway gateway(bridge_);
-    const auto connectResult = gateway.Connect(L"127.0.0.1");
+    const auto connectResult = gateway.Connect(bridgeOptions_.ipAddress);
     if (connectResult != BridgeError::Ok) {
         statusText_.SetWindowText(ToCString(L"接続失敗: " + ToDisplayText(connectResult)));
         return;

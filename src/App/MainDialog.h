@@ -4,7 +4,7 @@
 #include "DataGateway.h"
 #include "FunctionBarModel.h"
 #include "CustomGridCtrl.h"
-#include "MockBackendBridge.h"
+#include "BridgeFactory.h"
 #include "ScreenModels.h"
 #include "UpdateScheduler.h"
 #include "resource.h"
@@ -28,7 +28,7 @@ enum class MainScreenId
 class CMainDialog final : public CDialogEx
 {
 public:
-    CMainDialog();
+    explicit CMainDialog(BridgeFactoryOptions options);
     ~CMainDialog() override;
 
 protected:
@@ -59,7 +59,8 @@ private:
     CString ScreenTitle() const;
 
     DataCatalog catalog_;
-    std::shared_ptr<MockBackendBridge> bridge_;
+    BridgeFactoryOptions bridgeOptions_;
+    std::shared_ptr<IBackendBridge> bridge_;
     std::unique_ptr<UpdateCoordinator> coordinator_;
 
     CStatic statusText_;

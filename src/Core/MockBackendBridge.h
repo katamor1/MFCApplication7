@@ -1,20 +1,12 @@
 #pragma once
 
+#include "BackendBridge.h"
 #include "DataCatalog.h"
 
 #include <map>
 #include <mutex>
 #include <shared_mutex>
 #include <string>
-
-class IBackendBridge
-{
-public:
-    virtual ~IBackendBridge() = default;
-    virtual BridgeError Connect(const std::wstring& ipAddress) = 0;
-    virtual BridgeError Read(const DataKey& key, std::wstring& value) = 0;
-    virtual BridgeError Write(const DataKey& key, const std::wstring& value) = 0;
-};
 
 class MockBackendBridge final : public IBackendBridge
 {

@@ -1,3 +1,5 @@
+#include "BackendBridge.h"
+#include "ComBackendBridge.h"
 #include "DataCatalog.h"
 #include "MockBackendBridge.h"
 
@@ -8,15 +10,6 @@
 
 #include <cwctype>
 #include <string>
-
-struct __declspec(uuid("260B8AF6-FD4C-4060-A407-77D52EF54D30")) IBackendBridgeCom : public IDispatch
-{
-    virtual HRESULT STDMETHODCALLTYPE Connect(BSTR ipAddress, LONG* errorCode) = 0;
-    virtual HRESULT STDMETHODCALLTYPE Read(LONG dataId, LONG subId1, LONG subId2, LONG style, BSTR* value, LONG* errorCode) = 0;
-    virtual HRESULT STDMETHODCALLTYPE Write(LONG dataId, LONG subId1, LONG subId2, LONG style, BSTR value, LONG* errorCode) = 0;
-};
-
-struct __declspec(uuid("A737D261-91BC-4646-B58E-9E8B53378D6F")) BackendBridge;
 
 class CBackendBridgeMockModule final : public ATL::CAtlExeModuleT<CBackendBridgeMockModule>
 {
@@ -58,6 +51,53 @@ DataStyle ToStyle(LONG style)
 bool IsKnownStyle(LONG style)
 {
     return style >= 0 && style <= 3;
+}
+
+constexpr DISPID DispatchIdConnect = 1;
+constexpr DISPID DispatchIdRead = 2;
+constexpr DISPID DispatchIdWrite = 3;
+
+VARIANTARG* NaturalArgument(DISPPARAMS* parameters, UINT index)
+{
+    if (parameters == nullptr || parameters->rgvarg == nullptr || index >= parameters->cArgs) {
+        return nullptr;
+    }
+    return &parameters->rgvarg[parameters->cArgs - index - 1];
+}
+
+bool VariantToLong(const VARIANTARG& argument, LONG& value)
+{
+    ATL::CComVariant converted;
+    if (FAILED(VariantChangeType(&converted, const_cast<VARIANTARG*>(&argument), 0, VT_I4))) {
+        return false;
+    }
+    value = converted.lVal;
+    return true;
+}
+
+bool VariantToString(const VARIANTARG& argument, std::wstring& value)
+{
+    if (argument.vt == VT_BSTR) {
+        value = argument.bstrVal == nullptr ? L"" : std::wstring(argument.bstrVal, SysStringLen(argument.bstrVal));
+        return true;
+    }
+
+    ATL::CComVariant converted;
+    if (FAILED(VariantChangeType(&converted, const_cast<VARIANTARG*>(&argument), 0, VT_BSTR))) {
+        return false;
+    }
+    value = converted.bstrVal == nullptr ? L"" : std::wstring(converted.bstrVal, SysStringLen(converted.bstrVal));
+    return true;
+}
+
+HRESULT SetLongResult(VARIANT* result, LONG value)
+{
+    if (result != nullptr) {
+        VariantInit(result);
+        result->vt = VT_I4;
+        result->lVal = value;
+    }
+    return S_OK;
 }
 
 int RunSelfTest()
@@ -134,11 +174,44 @@ int UnregisterLocalServer()
     return 0;
 }
 
+int RunComSelfTest()
+{
+    const auto registerResult = RegisterLocalServer();
+    if (registerResult != 0) {
+        return 100 + registerResult;
+    }
+
+    int exitCode = 0;
+    {
+        ComBackendBridge bridge(L"MFCApplication7.BackendBridgeMock");
+        const auto connectError = bridge.Connect(L"127.0.0.1");
+        if (connectError != BridgeError::Ok) {
+            exitCode = 210 + static_cast<int>(connectError);
+        } else {
+            std::wstring value;
+            const auto readError = bridge.Read({1010, 0, 0, DataStyle::ThousandsSeparated}, value);
+            if (readError != BridgeError::Ok) {
+                exitCode = 220 + static_cast<int>(readError);
+            } else if (value.find(L",") == std::wstring::npos) {
+                exitCode = 221;
+            } else {
+                const auto writeError = bridge.Write({2001, 1, 0, DataStyle::Raw}, L"CNT-COM");
+                if (writeError != BridgeError::Ok) {
+                    exitCode = 230 + static_cast<int>(writeError);
+                }
+            }
+        }
+    }
+
+    UnregisterLocalServer();
+    return exitCode;
+}
+
 } // namespace
 
 class ATL_NO_VTABLE CBackendBridge
     : public ATL::CComObjectRootEx<ATL::CComMultiThreadModel>
-    , public ATL::CComCoClass<CBackendBridge, &__uuidof(BackendBridge)>
+    , public ATL::CComCoClass<CBackendBridge, &__uuidof(BackendBridgeComClass)>
     , public IBackendBridgeCom
 {
 public:
@@ -212,14 +285,126 @@ public:
         return E_NOTIMPL;
     }
 
-    HRESULT STDMETHODCALLTYPE GetIDsOfNames(REFIID, LPOLESTR*, UINT, LCID, DISPID*) override
+    HRESULT STDMETHODCALLTYPE GetIDsOfNames(REFIID, LPOLESTR* names, UINT count, LCID, DISPID* dispatchIds) override
     {
-        return E_NOTIMPL;
+        if (names == nullptr || dispatchIds == nullptr) {
+            return E_POINTER;
+        }
+
+        for (UINT index = 0; index < count; ++index) {
+            const std::wstring name = names[index] == nullptr ? L"" : ToLower(names[index]);
+            if (name == L"connect") {
+                dispatchIds[index] = DispatchIdConnect;
+            } else if (name == L"read") {
+                dispatchIds[index] = DispatchIdRead;
+            } else if (name == L"write") {
+                dispatchIds[index] = DispatchIdWrite;
+            } else {
+                dispatchIds[index] = DISPID_UNKNOWN;
+                return DISP_E_UNKNOWNNAME;
+            }
+        }
+        return S_OK;
     }
 
-    HRESULT STDMETHODCALLTYPE Invoke(DISPID, REFIID, LCID, WORD, DISPPARAMS*, VARIANT*, EXCEPINFO*, UINT*) override
+    HRESULT STDMETHODCALLTYPE Invoke(DISPID dispatchId, REFIID interfaceId, LCID, WORD flags, DISPPARAMS* parameters, VARIANT* result, EXCEPINFO*, UINT*) override
     {
-        return E_NOTIMPL;
+        if (interfaceId != IID_NULL) {
+            return DISP_E_UNKNOWNINTERFACE;
+        }
+        if ((flags & DISPATCH_METHOD) == 0) {
+            return DISP_E_MEMBERNOTFOUND;
+        }
+
+        switch (dispatchId) {
+        case DispatchIdConnect: {
+            if (parameters == nullptr || parameters->cArgs != 1) {
+                return DISP_E_BADPARAMCOUNT;
+            }
+            std::wstring ipAddress;
+            auto* ipAddressArgument = NaturalArgument(parameters, 0);
+            if (ipAddressArgument == nullptr || !VariantToString(*ipAddressArgument, ipAddress)) {
+                return DISP_E_TYPEMISMATCH;
+            }
+            return SetLongResult(result, static_cast<LONG>(bridge_.Connect(ipAddress)));
+        }
+        case DispatchIdRead: {
+            if (parameters == nullptr || parameters->cArgs != 5) {
+                return DISP_E_BADPARAMCOUNT;
+            }
+
+            LONG dataId{};
+            LONG subId1{};
+            LONG subId2{};
+            LONG style{};
+            auto* dataIdArgument = NaturalArgument(parameters, 0);
+            auto* subId1Argument = NaturalArgument(parameters, 1);
+            auto* subId2Argument = NaturalArgument(parameters, 2);
+            auto* styleArgument = NaturalArgument(parameters, 3);
+            auto* valueArgument = NaturalArgument(parameters, 4);
+            if (dataIdArgument == nullptr ||
+                subId1Argument == nullptr ||
+                subId2Argument == nullptr ||
+                styleArgument == nullptr ||
+                valueArgument == nullptr ||
+                valueArgument->vt != (VT_BSTR | VT_BYREF) ||
+                valueArgument->pbstrVal == nullptr ||
+                !VariantToLong(*dataIdArgument, dataId) ||
+                !VariantToLong(*subId1Argument, subId1) ||
+                !VariantToLong(*subId2Argument, subId2) ||
+                !VariantToLong(*styleArgument, style)) {
+                return DISP_E_TYPEMISMATCH;
+            }
+
+            SysFreeString(*valueArgument->pbstrVal);
+            *valueArgument->pbstrVal = SysAllocString(L"");
+            if (!IsKnownStyle(style)) {
+                return SetLongResult(result, static_cast<LONG>(BridgeError::InvalidStyle));
+            }
+
+            std::wstring text;
+            const auto error = bridge_.Read({static_cast<int>(dataId), static_cast<int>(subId1), static_cast<int>(subId2), ToStyle(style)}, text);
+            SysFreeString(*valueArgument->pbstrVal);
+            *valueArgument->pbstrVal = SysAllocString(text.c_str());
+            return SetLongResult(result, static_cast<LONG>(error));
+        }
+        case DispatchIdWrite: {
+            if (parameters == nullptr || parameters->cArgs != 5) {
+                return DISP_E_BADPARAMCOUNT;
+            }
+
+            LONG dataId{};
+            LONG subId1{};
+            LONG subId2{};
+            LONG style{};
+            std::wstring value;
+            auto* dataIdArgument = NaturalArgument(parameters, 0);
+            auto* subId1Argument = NaturalArgument(parameters, 1);
+            auto* subId2Argument = NaturalArgument(parameters, 2);
+            auto* styleArgument = NaturalArgument(parameters, 3);
+            auto* valueArgument = NaturalArgument(parameters, 4);
+            if (dataIdArgument == nullptr ||
+                subId1Argument == nullptr ||
+                subId2Argument == nullptr ||
+                styleArgument == nullptr ||
+                valueArgument == nullptr ||
+                !VariantToLong(*dataIdArgument, dataId) ||
+                !VariantToLong(*subId1Argument, subId1) ||
+                !VariantToLong(*subId2Argument, subId2) ||
+                !VariantToLong(*styleArgument, style) ||
+                !VariantToString(*valueArgument, value)) {
+                return DISP_E_TYPEMISMATCH;
+            }
+            if (!IsKnownStyle(style)) {
+                return SetLongResult(result, static_cast<LONG>(BridgeError::InvalidStyle));
+            }
+
+            const auto error = bridge_.Write({static_cast<int>(dataId), static_cast<int>(subId1), static_cast<int>(subId2), ToStyle(style)}, value);
+            return SetLongResult(result, static_cast<LONG>(error));
+        }
+        default:
+            return DISP_E_MEMBERNOTFOUND;
+        }
     }
 
 private:
@@ -227,7 +412,7 @@ private:
     MockBackendBridge bridge_;
 };
 
-OBJECT_ENTRY_AUTO(__uuidof(BackendBridge), CBackendBridge)
+OBJECT_ENTRY_AUTO(__uuidof(BackendBridgeComClass), CBackendBridge)
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR commandLine, int showCommand)
 {
@@ -240,6 +425,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR commandLine, int showCommand)
     }
     if (HasArgument(command, L"/UnregServer")) {
         return UnregisterLocalServer();
+    }
+    if (HasArgument(command, L"/ComSelfTest")) {
+        return RunComSelfTest();
     }
     return _AtlModule.WinMain(showCommand);
 }

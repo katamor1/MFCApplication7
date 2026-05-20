@@ -1,6 +1,6 @@
+#include "BridgeFactory.h"
 #include "DataCatalog.h"
 #include "DataGateway.h"
-#include "MockBackendBridge.h"
 #include "UpdateScheduler.h"
 
 #include <chrono>
@@ -21,15 +21,28 @@ int ParseDurationMs(int argc, wchar_t** argv)
     return 60000;
 }
 
+std::wstring JoinArguments(int argc, wchar_t** argv)
+{
+    std::wstring commandLine;
+    for (int index = 1; index < argc; ++index) {
+        if (!commandLine.empty()) {
+            commandLine += L' ';
+        }
+        commandLine += argv[index];
+    }
+    return commandLine;
+}
+
 } // namespace
 
 int wmain(int argc, wchar_t** argv)
 {
     const int durationMs = ParseDurationMs(argc, argv);
-    auto catalog = DataCatalog::CreateDefault();
-    auto bridge = std::make_shared<MockBackendBridge>(catalog);
+    auto options = ParseBridgeFactoryOptions(JoinArguments(argc, argv));
+    const auto catalog = LoadConfiguredCatalogOrDefault(options.catalogPath);
+    auto bridge = CreateBackendBridge(options);
     DataGateway gateway(bridge);
-    if (gateway.Connect(L"127.0.0.1") != BridgeError::Ok) {
+    if (gateway.Connect(options.ipAddress) != BridgeError::Ok) {
         std::wcerr << L"connect failed\n";
         return 1;
     }

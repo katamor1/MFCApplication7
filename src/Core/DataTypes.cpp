@@ -1,5 +1,6 @@
 #include "DataTypes.h"
 
+#include <stdexcept>
 #include <tuple>
 
 bool DataKey::operator==(const DataKey& other) const noexcept
@@ -34,4 +35,37 @@ std::wstring ToDisplayText(BridgeError error)
     default:
         return L"内部エラー";
     }
+}
+
+std::wstring ToStyleName(DataStyle style)
+{
+    switch (style) {
+    case DataStyle::Raw:
+        return L"raw";
+    case DataStyle::ThousandsSeparated:
+        return L"thousands";
+    case DataStyle::SecondsToHhMmSs:
+        return L"hhmmss";
+    case DataStyle::MillimetersToInches:
+        return L"inch";
+    default:
+        return L"unknown";
+    }
+}
+
+DataStyle ParseDataStyleName(const std::string& styleName)
+{
+    if (styleName == "raw") {
+        return DataStyle::Raw;
+    }
+    if (styleName == "thousands") {
+        return DataStyle::ThousandsSeparated;
+    }
+    if (styleName == "hhmmss") {
+        return DataStyle::SecondsToHhMmSs;
+    }
+    if (styleName == "inch") {
+        return DataStyle::MillimetersToInches;
+    }
+    throw std::runtime_error("unknown data style: " + styleName);
 }

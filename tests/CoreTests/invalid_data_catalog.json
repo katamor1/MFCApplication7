@@ -1,0 +1,11 @@
+{
+  "definitions": [
+    {
+      "dataId": 1000,
+      "name": "broken"
+    }
+  ],
+  "criticalKeys": [
+    {"dataId": 1000, "subId1": 0, "subId2": 0, "style": "raw"}
+  ]
+}

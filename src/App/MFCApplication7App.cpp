@@ -1,8 +1,8 @@
 #include "MFCApplication7App.h"
 
+#include "BridgeFactory.h"
 #include "DataGateway.h"
 #include "MainDialog.h"
-#include "MockBackendBridge.h"
 #include "ScreenModels.h"
 
 #include <afxcmn.h>
@@ -11,12 +11,11 @@ CMFCApplication7App theApp;
 
 namespace {
 
-int RunSelfTest()
+int RunSelfTest(const BridgeFactoryOptions& options)
 {
-    auto catalog = DataCatalog::CreateDefault();
-    auto bridge = std::make_shared<MockBackendBridge>(catalog);
+    auto bridge = CreateBackendBridge(options);
     DataGateway gateway(bridge);
-    if (gateway.Connect(L"127.0.0.1") != BridgeError::Ok) {
+    if (gateway.Connect(options.ipAddress) != BridgeError::Ok) {
         return 10;
     }
 
@@ -44,11 +43,12 @@ BOOL CMFCApplication7App::InitInstance()
     initControls.dwICC = ICC_WIN95_CLASSES | ICC_PROGRESS_CLASS | ICC_LISTVIEW_CLASSES;
     InitCommonControlsEx(&initControls);
 
+    const auto bridgeOptions = ParseBridgeFactoryOptions(m_lpCmdLine == nullptr ? L"" : std::wstring(m_lpCmdLine));
     if (CString(m_lpCmdLine).Find(L"/SelfTest") >= 0) {
-        ::ExitProcess(static_cast<UINT>(RunSelfTest()));
+        ::ExitProcess(static_cast<UINT>(RunSelfTest(bridgeOptions)));
     }
 
-    CMainDialog dialog;
+    CMainDialog dialog(bridgeOptions);
     m_pMainWnd = &dialog;
     dialog.DoModal();
     return FALSE;

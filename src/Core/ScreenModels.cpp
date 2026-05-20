@@ -48,8 +48,11 @@ ContainerSummary BuildContainerSummary(const DataGateway& gateway, int container
             ReadText(gateway, {2101, containerNo, itemNo, DataStyle::Raw}),
             ReadText(gateway, {2102, containerNo, itemNo, DataStyle::Raw}),
             ReadText(gateway, {2103, containerNo, itemNo, DataStyle::ThousandsSeparated}),
-            ReadText(gateway, {2104, containerNo, itemNo, DataStyle::SecondsToHhMmSs}),
+            ReadText(gateway, {2106, containerNo, itemNo, DataStyle::SecondsToHhMmSs}),
         });
+        if (summary.items.back().itemName.empty()) {
+            summary.items.pop_back();
+        }
     }
     return summary;
 }
@@ -94,10 +97,14 @@ GridModel BuildScheduleGrid(const DataGateway& gateway)
     grid.SetColumns({L"コンテナ", L"品目名", L"出庫終了予定", L"順序"});
     for (int containerNo = 1; containerNo <= 100; ++containerNo) {
         const int itemCount = ToInt(ReadText(gateway, {2003, containerNo, 0, DataStyle::Raw}));
-        for (int itemNo = 1; itemNo <= std::min(itemCount, 10); ++itemNo) {
+        for (int itemNo = 1; itemNo <= std::min(itemCount, 1000); ++itemNo) {
+            const auto itemName = ReadText(gateway, {2100, containerNo, itemNo, DataStyle::Raw});
+            if (itemName.empty()) {
+                continue;
+            }
             grid.AddRow({
                 GridCell::Text(std::to_wstring(containerNo)),
-                GridCell::Text(ReadText(gateway, {2100, containerNo, itemNo, DataStyle::Raw})),
+                GridCell::Text(itemName),
                 GridCell::Text(ReadText(gateway, {3000, containerNo, itemNo, DataStyle::Raw})),
                 GridCell::Text(ReadText(gateway, {2103, containerNo, itemNo, DataStyle::Raw}), CellKind::Spin),
             },

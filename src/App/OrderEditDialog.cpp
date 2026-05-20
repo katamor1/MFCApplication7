@@ -32,6 +32,13 @@ bool IsValidOrder(const std::wstring& value)
     }
 }
 
+CRect DluRect(CWnd* window, int left, int top, int right, int bottom)
+{
+    CRect rect(left, top, right, bottom);
+    ::MapDialogRect(window->GetSafeHwnd(), &rect);
+    return rect;
+}
+
 } // namespace
 
 /**
@@ -70,11 +77,11 @@ BOOL COrderEditDialog::OnInitDialog()
 {
     CDialogEx::OnInitDialog();
 
-    contextText_.Create(L"", WS_CHILD | WS_VISIBLE | SS_LEFT, CRect(12, 12, 360, 48), this, IDC_ORDER_CONTEXT);
-    orderLabel_.Create(L"出庫順序", WS_CHILD | WS_VISIBLE | SS_LEFT, CRect(12, 62, 100, 84), this);
-    orderEdit_.Create(WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, CRect(116, 58, 210, 82), this, IDC_ORDER_EDIT);
-    okButton_.Create(L"OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, CRect(196, 112, 286, 142), this, IDOK);
-    cancelButton_.Create(L"キャンセル", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, CRect(300, 112, 420, 142), this, IDCANCEL);
+    contextText_.Create(L"", WS_CHILD | WS_VISIBLE | SS_LEFT, DluRect(this, 8, 8, 252, 28), this, IDC_ORDER_CONTEXT);
+    orderLabel_.Create(L"出庫順序", WS_CHILD | WS_VISIBLE | SS_LEFT, DluRect(this, 8, 42, 70, 56), this);
+    orderEdit_.Create(WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, DluRect(this, 78, 40, 140, 56), this, IDC_ORDER_EDIT);
+    okButton_.Create(L"OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, DluRect(this, 140, 84, 190, 102), this, IDOK);
+    cancelButton_.Create(L"キャンセル", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, DluRect(this, 198, 84, 252, 102), this, IDCANCEL);
 
     CString context;
     context.Format(L"コンテナ %d / %s", containerNo_, itemName_.c_str());

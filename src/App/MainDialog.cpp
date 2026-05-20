@@ -2,6 +2,8 @@
 
 #include "HistoryRequestDialog.h"
 #include "OrderEditDialog.h"
+#include "ScheduleAddDialog.h"
+#include "ScheduleDeleteConfirmDialog.h"
 
 #include <algorithm>
 #include <sstream>
@@ -173,6 +175,14 @@ void CMainDialog::OnFunctionCommand(UINT id)
             ChangeScheduleOrder(selectedRow);
             return;
         }
+        if (slot == 3) {
+            AddScheduleItem();
+            return;
+        }
+        if (slot == 4) {
+            DeleteScheduleItem(selectedRow);
+            return;
+        }
     }
 
     if ((currentScreen_ == MainScreenId::Station || currentScreen_ == MainScreenId::ContainerList) && slot == 1) {
@@ -325,6 +335,11 @@ void CMainDialog::RefreshStatus(const UpdateSnapshot& snapshot)
         text << L" / 最終Write開始遅延: " << metrics.lastWriteStartDelayMs << L"ms";
         text << L" / Write完了: " << metrics.writeCompletedCount;
         text << L" / 最終Write結果: " << ToDisplayText(metrics.lastWriteErrorCode);
+        if (metrics.scheduleAddCompletedCount > 0 || metrics.scheduleDeleteCompletedCount > 0) {
+            text << L" / 予定追加: " << metrics.scheduleAddCompletedCount
+                 << L" / 予定削除: " << metrics.scheduleDeleteCompletedCount
+                 << L" / 予定Write結果: " << ToDisplayText(metrics.lastScheduleMutationErrorCode);
+        }
     }
     if (!snapshot.historyStatusText.empty()) {
         text << L" / 履歴: " << snapshot.historyStatusText;
@@ -487,6 +502,50 @@ void CMainDialog::ChangeScheduleOrder(int row)
     }
 
     coordinator_->RequestWrite({2103, binding.containerNo, binding.itemNo, DataStyle::Raw}, dialog.OrderText());
+    RefreshUi(false);
+}
+
+/**
+ * @brief Open add dialog and enqueue a provisional schedule add write.
+ */
+void CMainDialog::AddScheduleItem()
+{
+    if (coordinator_ == nullptr) {
+        return;
+    }
+
+    CScheduleAddDialog dialog(this);
+    if (dialog.DoModal() != IDOK) {
+        return;
+    }
+
+    const auto request = dialog.Request();
+    coordinator_->RequestWrite({2104, request.containerNo, request.itemNo, DataStyle::Raw}, EncodeScheduleAddValue(request));
+    RefreshUi(false);
+}
+
+/**
+ * @brief Confirm deletion for selected schedule row and enqueue delete write.
+ */
+void CMainDialog::DeleteScheduleItem(int row)
+{
+    if (row < 0 || coordinator_ == nullptr) {
+        return;
+    }
+
+    const auto binding = contentList_.RowBindingAt(row);
+    if (binding.containerNo <= 0 || binding.itemNo <= 0) {
+        return;
+    }
+
+    const std::wstring itemName(contentList_.GetItemText(row, 1).GetString());
+    const std::wstring currentOrder(contentList_.GetItemText(row, 3).GetString());
+    CScheduleDeleteConfirmDialog dialog(binding.containerNo, binding.itemNo, itemName, currentOrder, this);
+    if (dialog.DoModal() != IDOK) {
+        return;
+    }
+
+    coordinator_->RequestWrite({2105, binding.containerNo, binding.itemNo, DataStyle::Raw}, L"1");
     RefreshUi(false);
 }
 

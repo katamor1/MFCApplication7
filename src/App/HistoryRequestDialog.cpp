@@ -35,6 +35,13 @@ bool TryParseDays(const std::wstring& value, int& days)
     }
 }
 
+CRect DluRect(CWnd* window, int left, int top, int right, int bottom)
+{
+    CRect rect(left, top, right, bottom);
+    ::MapDialogRect(window->GetSafeHwnd(), &rect);
+    return rect;
+}
+
 } // namespace
 
 /**
@@ -60,11 +67,11 @@ BOOL CHistoryRequestDialog::OnInitDialog()
 {
     CDialogEx::OnInitDialog();
 
-    contextText_.Create(L"出庫履歴の取得期間を指定してください。", WS_CHILD | WS_VISIBLE | SS_LEFT, CRect(12, 12, 380, 48), this, IDC_HISTORY_CONTEXT);
-    daysLabel_.Create(L"過去日数", WS_CHILD | WS_VISIBLE | SS_LEFT, CRect(12, 62, 100, 84), this);
-    daysEdit_.Create(WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, CRect(116, 58, 210, 82), this, IDC_HISTORY_DAYS_EDIT);
-    okButton_.Create(L"OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, CRect(196, 112, 286, 142), this, IDOK);
-    cancelButton_.Create(L"キャンセル", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, CRect(300, 112, 420, 142), this, IDCANCEL);
+    contextText_.Create(L"出庫履歴の取得期間を指定してください。", WS_CHILD | WS_VISIBLE | SS_LEFT, DluRect(this, 8, 8, 252, 28), this, IDC_HISTORY_CONTEXT);
+    daysLabel_.Create(L"過去日数", WS_CHILD | WS_VISIBLE | SS_LEFT, DluRect(this, 8, 42, 70, 56), this);
+    daysEdit_.Create(WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, DluRect(this, 78, 40, 140, 56), this, IDC_HISTORY_DAYS_EDIT);
+    okButton_.Create(L"OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, DluRect(this, 140, 84, 190, 102), this, IDOK);
+    cancelButton_.Create(L"キャンセル", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, DluRect(this, 198, 84, 252, 102), this, IDCANCEL);
 
     SetDlgItemText(IDC_HISTORY_DAYS_EDIT, L"7");
     daysEdit_.SetFocus();

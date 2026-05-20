@@ -1,7 +1,7 @@
 # データIDカタログ仕様
 
 - Source: `config\data_catalog.json`
-- Definitions: 31
+- Definitions: 33
 - Critical keys: 20
 
 ## Definitions
@@ -32,12 +32,14 @@
 | 2001 | コンテナ名 | yes | 1-100 | 0-0 | raw | no |
 | 2002 | コンテナ状態 | no | 1-100 | 0-0 | raw | no |
 | 2003 | 品目数 | no | 1-100 | 0-0 | raw, thousands | no |
-| 2100 | 品目名 | yes | 1-100 | 1-10 | raw | no |
-| 2101 | 入庫日付 | no | 1-100 | 1-10 | raw | no |
-| 2102 | 出庫開始予定日時 | yes | 1-100 | 1-10 | raw | no |
-| 2103 | 出庫順序 | yes | 1-100 | 1-10 | raw, thousands | no |
-| 2104 | 出庫作業時間 | no | 1-100 | 1-10 | raw, hhmmss | no |
-| 3000 | 出庫終了予定日時 | yes | 1-100 | 1-10 | raw | no |
+| 2100 | 品目名 | yes | 1-100 | 1-1000 | raw | no |
+| 2101 | 入庫日付 | no | 1-100 | 1-1000 | raw | no |
+| 2102 | 出庫開始予定日時 | yes | 1-100 | 1-1000 | raw | no |
+| 2103 | 出庫順序 | yes | 1-100 | 1-1000 | raw, thousands | no |
+| 2104 | 出庫予定追加 | yes | 1-100 | 1-1000 | raw | no |
+| 2105 | 出庫予定削除 | yes | 1-100 | 1-1000 | raw | no |
+| 2106 | 出庫作業時間 | no | 1-100 | 1-1000 | raw, hhmmss | no |
+| 3000 | 出庫終了予定日時 | yes | 1-100 | 1-1000 | raw | no |
 | 4000 | 出庫履歴 | no | 0-365 | 0-999 | raw | no |
 
 ## Critical Keys

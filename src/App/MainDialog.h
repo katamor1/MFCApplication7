@@ -130,6 +130,14 @@ private:
      */
     void ChangeScheduleOrder(int row);
     /**
+     * @brief 出庫予定追加を要求する。
+     */
+    void AddScheduleItem();
+    /**
+     * @brief 選択行の出庫予定削除を要求する。
+     */
+    void DeleteScheduleItem(int row);
+    /**
      * @brief 現在画面の表示名を取得する。
      */
     CString ScreenTitle() const;

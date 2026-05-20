@@ -436,12 +436,14 @@ DataCatalog DataCatalog::CreateDefault()
     catalog.AddDefinition(Definition(2001, L"コンテナ名", true, 1, 100, 0, 0, RawOnly()));
     catalog.AddDefinition(Definition(2002, L"コンテナ状態", false, 1, 100, 0, 0, RawOnly()));
     catalog.AddDefinition(Definition(2003, L"品目数", false, 1, 100, 0, 0, RawAnd(DataStyle::ThousandsSeparated)));
-    catalog.AddDefinition(Definition(2100, L"品目名", true, 1, 100, 1, 10, RawOnly()));
-    catalog.AddDefinition(Definition(2101, L"入庫日付", false, 1, 100, 1, 10, RawOnly()));
-    catalog.AddDefinition(Definition(2102, L"出庫開始予定日時", true, 1, 100, 1, 10, RawOnly()));
-    catalog.AddDefinition(Definition(2103, L"出庫順序", true, 1, 100, 1, 10, RawAnd(DataStyle::ThousandsSeparated)));
-    catalog.AddDefinition(Definition(2104, L"出庫作業時間", false, 1, 100, 1, 10, RawAnd(DataStyle::SecondsToHhMmSs)));
-    catalog.AddDefinition(Definition(3000, L"出庫終了予定日時", true, 1, 100, 1, 10, RawOnly()));
+    catalog.AddDefinition(Definition(2100, L"品目名", true, 1, 100, 1, 1000, RawOnly()));
+    catalog.AddDefinition(Definition(2101, L"入庫日付", false, 1, 100, 1, 1000, RawOnly()));
+    catalog.AddDefinition(Definition(2102, L"出庫開始予定日時", true, 1, 100, 1, 1000, RawOnly()));
+    catalog.AddDefinition(Definition(2103, L"出庫順序", true, 1, 100, 1, 1000, RawAnd(DataStyle::ThousandsSeparated)));
+    catalog.AddDefinition(Definition(2104, L"出庫予定追加", true, 1, 100, 1, 1000, RawOnly()));
+    catalog.AddDefinition(Definition(2105, L"出庫予定削除", true, 1, 100, 1, 1000, RawOnly()));
+    catalog.AddDefinition(Definition(2106, L"出庫作業時間", false, 1, 100, 1, 1000, RawAnd(DataStyle::SecondsToHhMmSs)));
+    catalog.AddDefinition(Definition(3000, L"出庫終了予定日時", true, 1, 100, 1, 1000, RawOnly()));
     catalog.AddDefinition(Definition(4000, L"出庫履歴", false, 0, 365, 0, 999, RawOnly()));
 
     return catalog;

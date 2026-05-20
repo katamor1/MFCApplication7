@@ -85,6 +85,8 @@
     <ClInclude Include="HistoryRequestDialog.h" />
     <ClInclude Include="MainDialog.h" />
     <ClInclude Include="OrderEditDialog.h" />
+    <ClInclude Include="ScheduleAddDialog.h" />
+    <ClInclude Include="ScheduleDeleteConfirmDialog.h" />
     <ClInclude Include="resource.h" />
   </ItemGroup>
   <ItemGroup>
@@ -93,6 +95,8 @@
     <ClCompile Include="HistoryRequestDialog.cpp" />
     <ClCompile Include="MainDialog.cpp" />
     <ClCompile Include="OrderEditDialog.cpp" />
+    <ClCompile Include="ScheduleAddDialog.cpp" />
+    <ClCompile Include="ScheduleDeleteConfirmDialog.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="MFCApplication7.rc" />

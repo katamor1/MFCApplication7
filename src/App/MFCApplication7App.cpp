@@ -46,6 +46,19 @@ bool WaitForWriteCount(const UpdateCoordinator& coordinator, int expectedCount)
 }
 
 /**
+ * @brief Check whether schedule grid contains a bound row.
+ */
+bool HasScheduleRow(const GridModel& grid, int containerNo, int itemNo)
+{
+    for (const auto& row : grid.Rows()) {
+        if (row.binding.containerNo == containerNo && row.binding.itemNo == itemNo) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
  * @brief Poll until history load begins and reports progress.
  */
 bool WaitForHistoryProgress(const UpdateCoordinator& coordinator)
@@ -162,9 +175,58 @@ int RunHistorySmoke(const BridgeFactoryOptions& options)
 }
 
 /**
+ * @brief Run schedule add/delete write smoke test.
+ */
+int RunScheduleMutationSmoke(const BridgeFactoryOptions& options)
+{
+    const auto catalog = LoadConfiguredCatalogOrDefault(options.catalogPath);
+    auto bridge = CreateBackendBridge(options);
+    DataGateway gateway(bridge);
+    if (gateway.Connect(options.ipAddress) != BridgeError::Ok) {
+        return 200;
+    }
+
+    UpdateCoordinator coordinator(catalog, gateway);
+    coordinator.Start();
+    const ScheduleAddRequest addRequest{1, 3, 2222, L"SMOKE-ITEM"};
+    coordinator.RequestWrite({2104, addRequest.containerNo, addRequest.itemNo, DataStyle::Raw}, EncodeScheduleAddValue(addRequest));
+    if (!WaitForWriteCount(coordinator, 1)) {
+        coordinator.Stop();
+        return 210;
+    }
+    if (!HasScheduleRow(BuildScheduleGrid(gateway), 1, 3)) {
+        coordinator.Stop();
+        return 220;
+    }
+
+    coordinator.RequestWrite({2105, 1, 3, DataStyle::Raw}, L"1");
+    if (!WaitForWriteCount(coordinator, 2)) {
+        coordinator.Stop();
+        return 230;
+    }
+    if (HasScheduleRow(BuildScheduleGrid(gateway), 1, 3)) {
+        coordinator.Stop();
+        return 240;
+    }
+    coordinator.Stop();
+
+    const auto metrics = coordinator.Metrics();
+    if (metrics.lastWriteStartDelayMs < 0 || metrics.lastWriteStartDelayMs > 100) {
+        return 250;
+    }
+    if (metrics.lastWriteErrorCode != BridgeError::Ok || metrics.lastScheduleMutationErrorCode != BridgeError::Ok) {
+        return 260;
+    }
+    if (metrics.scheduleAddCompletedCount != 1 || metrics.scheduleDeleteCompletedCount != 1) {
+        return 270;
+    }
+    return 0;
+}
+
+/**
  * @brief Run core behavior checks and optional smoke subtests.
  */
-int RunSelfTest(const BridgeFactoryOptions& options, bool writeSmoke, bool historySmoke)
+int RunSelfTest(const BridgeFactoryOptions& options, bool writeSmoke, bool historySmoke, bool scheduleMutationSmoke)
 {
     auto bridge = CreateBackendBridge(options);
     DataGateway gateway(bridge);
@@ -188,6 +250,9 @@ int RunSelfTest(const BridgeFactoryOptions& options, bool writeSmoke, bool histo
     if (historySmoke) {
         return RunHistorySmoke(options);
     }
+    if (scheduleMutationSmoke) {
+        return RunScheduleMutationSmoke(options);
+    }
     return 0;
 }
 
@@ -208,7 +273,10 @@ BOOL CMFCApplication7App::InitInstance()
     const std::wstring commandLine = m_lpCmdLine == nullptr ? L"" : std::wstring(m_lpCmdLine);
     const auto bridgeOptions = ParseBridgeFactoryOptions(commandLine);
     if (HasArgument(commandLine, L"/SelfTest")) {
-        ::ExitProcess(static_cast<UINT>(RunSelfTest(bridgeOptions, HasArgument(commandLine, L"/WriteSmoke"), HasArgument(commandLine, L"/HistorySmoke"))));
+        ::ExitProcess(static_cast<UINT>(RunSelfTest(bridgeOptions,
+                                                    HasArgument(commandLine, L"/WriteSmoke"),
+                                                    HasArgument(commandLine, L"/HistorySmoke"),
+                                                    HasArgument(commandLine, L"/ScheduleMutationSmoke"))));
     }
 
     CMainDialog dialog(bridgeOptions);

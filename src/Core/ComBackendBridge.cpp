@@ -130,6 +130,10 @@ BridgeError ComBackendBridge::Connect(const std::wstring& ipAddress)
         std::lock_guard<std::mutex> lock(connectionMutex_);
         connectedIpAddress_ = ipAddress;
         hasConnectedIpAddress_ = true;
+    } else {
+        std::lock_guard<std::mutex> lock(connectionMutex_);
+        connectedIpAddress_.clear();
+        hasConnectedIpAddress_ = false;
     }
     return error;
 }

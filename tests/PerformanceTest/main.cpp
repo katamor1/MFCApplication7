@@ -9,8 +9,19 @@
 #include <string>
 #include <thread>
 
+/**
+ * @file tests/PerformanceTest/main.cpp
+ * @brief Runs the coordinator performance smoke test from the command line.
+ */
+
 namespace {
 
+/**
+ * @brief Parse optional performance-test duration.
+ * @param argc Argument count.
+ * @param argv Wide-character argument vector.
+ * @return Duration in milliseconds, with a minimum of 1000 ms.
+ */
 int ParseDurationMs(int argc, wchar_t** argv)
 {
     for (int index = 1; index + 1 < argc; ++index) {
@@ -21,6 +32,12 @@ int ParseDurationMs(int argc, wchar_t** argv)
     return 60000;
 }
 
+/**
+ * @brief Join command-line arguments for bridge option parsing.
+ * @param argc Argument count.
+ * @param argv Wide-character argument vector.
+ * @return Space-separated command line without the executable name.
+ */
 std::wstring JoinArguments(int argc, wchar_t** argv)
 {
     std::wstring commandLine;
@@ -35,6 +52,12 @@ std::wstring JoinArguments(int argc, wchar_t** argv)
 
 } // namespace
 
+/**
+ * @brief Run update-coordinator performance checks against the configured bridge.
+ * @param argc Argument count.
+ * @param argv Wide-character argument vector.
+ * @return 0 on success, or a non-zero code identifying the failed performance gate.
+ */
 int wmain(int argc, wchar_t** argv)
 {
     const int durationMs = ParseDurationMs(argc, argv);

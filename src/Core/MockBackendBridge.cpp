@@ -94,6 +94,24 @@ int ItemCount(int containerNo)
     return ContainerState(containerNo) == L"コンテナなし" ? 0 : (containerNo % 10) + 1;
 }
 
+/**
+ * @brief Decode provisional schedule-add payload: order<TAB>itemName.
+ */
+bool TryDecodeScheduleAddValue(const std::wstring& value, int& order, std::wstring& itemName)
+{
+    const auto separator = value.find(L'\t');
+    if (separator == std::wstring::npos) {
+        return false;
+    }
+    try {
+        order = std::stoi(value.substr(0, separator));
+    } catch (...) {
+        return false;
+    }
+    itemName = value.substr(separator + 1);
+    return order >= 1 && order <= 9999 && !itemName.empty();
+}
+
 } // namespace
 
 /**
@@ -143,6 +161,14 @@ BridgeError MockBackendBridge::Read(const DataKey& key, std::wstring& value)
         if (overrideValue != overrides_.end()) {
             rawValue = overrideValue->second;
             hasOverride = true;
+        } else if (key.style != DataStyle::Raw) {
+            DataKey rawKey = key;
+            rawKey.style = DataStyle::Raw;
+            const auto rawOverrideValue = overrides_.find(rawKey);
+            if (rawOverrideValue != overrides_.end()) {
+                rawValue = rawOverrideValue->second;
+                hasOverride = true;
+            }
         }
     }
     if (!hasOverride) {
@@ -172,6 +198,32 @@ BridgeError MockBackendBridge::Write(const DataKey& key, const std::wstring& val
     }
 
     std::lock_guard<std::mutex> lock(overridesMutex_);
+    if (key.dataId == 2104) {
+        int order = 0;
+        std::wstring itemName;
+        if (!TryDecodeScheduleAddValue(value, order, itemName)) {
+            return BridgeError::InternalError;
+        }
+
+        const DataKey itemNameKey{2100, key.subId1, key.subId2, DataStyle::Raw};
+        const DataKey orderKey{2103, key.subId1, key.subId2, DataStyle::Raw};
+        const DataKey itemCountKey{2003, key.subId1, 0, DataStyle::Raw};
+        overrides_[itemNameKey] = itemName;
+        overrides_[orderKey] = std::to_wstring(order);
+        const auto itemCount = overrides_.find(itemCountKey);
+        const int currentCount = itemCount == overrides_.end() ? ItemCount(key.subId1) : static_cast<int>(ParseInteger(itemCount->second));
+        if (key.subId2 > currentCount) {
+            overrides_[itemCountKey] = std::to_wstring(key.subId2);
+        }
+        overrides_[key] = value;
+        return BridgeError::Ok;
+    }
+    if (key.dataId == 2105) {
+        overrides_[{2100, key.subId1, key.subId2, DataStyle::Raw}] = L"";
+        overrides_[key] = value;
+        return BridgeError::Ok;
+    }
+
     overrides_[key] = value;
     return BridgeError::Ok;
 }
@@ -217,6 +269,10 @@ std::wstring MockBackendBridge::RawValue(const DataKey& key) const
     case 2103:
         return std::to_wstring(containerNo * 10 + key.subId2);
     case 2104:
+        return L"";
+    case 2105:
+        return L"";
+    case 2106:
         return std::to_wstring(300 + key.subId2 * 45);
     case 3000:
         return L"2026/05/22 " + std::to_wstring((containerNo + key.subId2) % 24) + L":30";

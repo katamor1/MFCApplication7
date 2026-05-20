@@ -52,8 +52,8 @@ std::vector<FunctionAction> BuildScheduleFunctionActions(bool hasSelection)
     auto actions = EightSlots();
     actions[0] = {1, L"details", L"詳細", hasSelection};
     actions[1] = {2, L"order-change", L"順序変更", hasSelection};
-    actions[2] = {3, L"add", L"追加", false};
-    actions[3] = {4, L"delete", L"削除", false};
+    actions[2] = {3, L"add", L"追加", true};
+    actions[3] = {4, L"delete", L"削除", hasSelection};
     return actions;
 }
 

@@ -69,6 +69,14 @@ struct HistoryRequest
     int days{7};
 };
 
+struct ScheduleAddRequest
+{
+    int containerNo{};
+    int itemNo{};
+    int order{};
+    std::wstring itemName;
+};
+
 /**
  * @brief 履歴取得1件分の表示情報。
  */
@@ -84,6 +92,10 @@ struct HistoryRecord
 bool IsValidHistoryRequest(HistoryRequest request) noexcept;
 /** @brief 履歴読み取り用キーを組み立てる。 */
 DataKey MakeHistoryKey(int dayOffset, int recordIndex) noexcept;
+/** @brief 出庫予定追加要求を検証する。 */
+bool IsValidScheduleAddRequest(const ScheduleAddRequest& request) noexcept;
+/** @brief 出庫予定追加Write用の値を組み立てる。 */
+std::wstring EncodeScheduleAddValue(const ScheduleAddRequest& request);
 
 /**
  * @brief UI が1回の再描画で参照する状態スナップショット。
@@ -107,6 +119,9 @@ struct SchedulerMetrics
     long long lastWriteStartDelayMs{-1};
     int writeCompletedCount{};
     BridgeError lastWriteErrorCode{BridgeError::Ok};
+    int scheduleAddCompletedCount{};
+    int scheduleDeleteCompletedCount{};
+    BridgeError lastScheduleMutationErrorCode{BridgeError::Ok};
     int historyReadCount{};
     int historyErrorCount{};
     int historyCancelCount{};
@@ -114,13 +129,13 @@ struct SchedulerMetrics
 };
 
 /**
- * @brief 3種類ループ（重要/通常/Write）を管理し、スナップショットとメトリクスを提供する。
+ * @brief 4種類ループ（重要/通常/Write/履歴）を管理し、スナップショットとメトリクスを提供する。
  */
 class UpdateCoordinator
 {
 public:
     /**
-     * @brief カタログとゲートウェイを受け取り、初期状態の快照を作る。
+     * @brief カタログとゲートウェイを受け取り、初期状態のスナップショットを作る。
      */
     UpdateCoordinator(DataCatalog catalog, DataGateway gateway);
     /**
@@ -201,6 +216,9 @@ private:
     std::atomic<long long> lastWriteStartDelayMs_{-1};
     std::atomic<int> writeCompletedCount_{0};
     std::atomic<int> lastWriteErrorCode_{static_cast<int>(BridgeError::Ok)};
+    std::atomic<int> scheduleAddCompletedCount_{0};
+    std::atomic<int> scheduleDeleteCompletedCount_{0};
+    std::atomic<int> lastScheduleMutationErrorCode_{static_cast<int>(BridgeError::Ok)};
     std::atomic<int> historyReadCount_{0};
     std::atomic<int> historyErrorCount_{0};
     std::atomic<int> historyCancelCount_{0};

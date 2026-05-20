@@ -75,6 +75,33 @@ DataKey MakeHistoryKey(int dayOffset, int recordIndex) noexcept
 }
 
 /**
+ * @brief Validate schedule add form values before creating a write payload.
+ */
+bool IsValidScheduleAddRequest(const ScheduleAddRequest& request) noexcept
+{
+    if (request.containerNo < 1 || request.containerNo > 100 ||
+        request.itemNo < 1 || request.itemNo > 1000 ||
+        request.order < 1 || request.order > 9999 ||
+        request.itemName.empty() || request.itemName.size() > 40) {
+        return false;
+    }
+    for (const auto ch : request.itemName) {
+        if (ch == L'\t' || ch == L'\r' || ch == L'\n') {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * @brief Encode order and item name for the provisional schedule-add COM write.
+ */
+std::wstring EncodeScheduleAddValue(const ScheduleAddRequest& request)
+{
+    return std::to_wstring(request.order) + L"\t" + request.itemName;
+}
+
+/**
  * @brief Initialize coordinator state and initialize history status text.
  */
 UpdateCoordinator::UpdateCoordinator(DataCatalog catalog, DataGateway gateway)
@@ -148,6 +175,10 @@ void UpdateCoordinator::RequestWrite(DataKey key, std::wstring value)
  */
 bool UpdateCoordinator::StartHistoryLoad(HistoryRequest request)
 {
+    if (historyRunning_.load()) {
+        return false;
+    }
+
     if (!IsValidHistoryRequest(request)) {
         historyProgress_ = 0;
         historyCancelRequested_ = false;
@@ -231,6 +262,9 @@ SchedulerMetrics UpdateCoordinator::Metrics() const noexcept
     metrics.lastWriteStartDelayMs = lastWriteStartDelayMs_.load();
     metrics.writeCompletedCount = writeCompletedCount_.load();
     metrics.lastWriteErrorCode = static_cast<BridgeError>(lastWriteErrorCode_.load());
+    metrics.scheduleAddCompletedCount = scheduleAddCompletedCount_.load();
+    metrics.scheduleDeleteCompletedCount = scheduleDeleteCompletedCount_.load();
+    metrics.lastScheduleMutationErrorCode = static_cast<BridgeError>(lastScheduleMutationErrorCode_.load());
     metrics.historyReadCount = historyReadCount_.load();
     metrics.historyErrorCount = historyErrorCount_.load();
     metrics.historyCancelCount = historyCancelCount_.load();
@@ -305,6 +339,13 @@ void UpdateCoordinator::WriteLoop()
         lastWriteStartDelayMs_ = delay;
         const auto error = gateway_.Write(request.key, request.value);
         lastWriteErrorCode_ = static_cast<int>(error);
+        if (request.key.dataId == 2104) {
+            ++scheduleAddCompletedCount_;
+            lastScheduleMutationErrorCode_ = static_cast<int>(error);
+        } else if (request.key.dataId == 2105) {
+            ++scheduleDeleteCompletedCount_;
+            lastScheduleMutationErrorCode_ = static_cast<int>(error);
+        }
         ++writeCompletedCount_;
     }
 }

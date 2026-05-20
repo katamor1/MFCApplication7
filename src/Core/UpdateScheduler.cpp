@@ -1,6 +1,7 @@
 #include "UpdateScheduler.h"
 
 #include <chrono>
+#include <iterator>
 #include <stdexcept>
 #include <utility>
 
@@ -8,11 +9,29 @@
 #include <windows.h>
 #endif
 
+/**
+ * @file UpdateScheduler.cpp
+ * @brief Multi-threaded scheduler implementation for critical/normal updates, writes, and history reads.
+ */
+
+namespace {
+
+constexpr int kHistoryRecordsPerDay = 1000;
+constexpr size_t kHistorySnapshotLimit = 500;
+constexpr size_t kHistoryBatchSize = 10;
+constexpr int kConsecutiveHistoryErrorLimit = 50;
+
+} // namespace
+
 void PrioritizedWorkQueue::Push(WorkItem item)
 {
     queue_.push(std::move(item));
 }
 
+/**
+ * @brief Pop highest-priority queue item.
+ * @throws std::runtime_error when queue is empty.
+ */
 WorkItem PrioritizedWorkQueue::Pop()
 {
     if (queue_.empty()) {
@@ -28,6 +47,9 @@ bool PrioritizedWorkQueue::Empty() const noexcept
     return queue_.empty();
 }
 
+/**
+ * @brief Priority comparator for priority_queue.
+ */
 bool PrioritizedWorkQueue::Compare::operator()(const WorkItem& left, const WorkItem& right) const noexcept
 {
     if (left.priority != right.priority) {
@@ -36,17 +58,43 @@ bool PrioritizedWorkQueue::Compare::operator()(const WorkItem& left, const WorkI
     return left.sequence > right.sequence;
 }
 
+/**
+ * @brief Check history request range (1..365 days).
+ */
+bool IsValidHistoryRequest(HistoryRequest request) noexcept
+{
+    return request.days >= 1 && request.days <= 365;
+}
+
+/**
+ * @brief Build synthetic key for history read records.
+ */
+DataKey MakeHistoryKey(int dayOffset, int recordIndex) noexcept
+{
+    return {4000, dayOffset, recordIndex, DataStyle::Raw};
+}
+
+/**
+ * @brief Initialize coordinator state and initialize history status text.
+ */
 UpdateCoordinator::UpdateCoordinator(DataCatalog catalog, DataGateway gateway)
     : catalog_(std::move(catalog))
     , gateway_(std::move(gateway))
 {
+    snapshot_.historyStatusText = L"待機";
 }
 
+/**
+ * @brief Ensure threads are stopped during destruction.
+ */
 UpdateCoordinator::~UpdateCoordinator()
 {
     Stop();
 }
 
+/**
+ * @brief Start critical/normal/write loops.
+ */
 void UpdateCoordinator::Start()
 {
     if (running_.exchange(true)) {
@@ -58,12 +106,16 @@ void UpdateCoordinator::Start()
     writeThread_ = std::thread(&UpdateCoordinator::WriteLoop, this);
 }
 
+/**
+ * @brief Stop loops, cancel pending history, and join worker threads.
+ */
 void UpdateCoordinator::Stop()
 {
     if (!running_.exchange(false)) {
         return;
     }
 
+    historyCancelRequested_ = true;
     writeCv_.notify_all();
     if (criticalThread_.joinable()) {
         criticalThread_.join();
@@ -79,6 +131,9 @@ void UpdateCoordinator::Stop()
     }
 }
 
+/**
+ * @brief Enqueue write request with enqueue timestamp.
+ */
 void UpdateCoordinator::RequestWrite(DataKey key, std::wstring value)
 {
     {
@@ -88,42 +143,104 @@ void UpdateCoordinator::RequestWrite(DataKey key, std::wstring value)
     writeCv_.notify_one();
 }
 
-void UpdateCoordinator::StartHistoryLoad(int totalSteps)
+/**
+ * @brief Start history read worker and initialize snapshot state.
+ */
+bool UpdateCoordinator::StartHistoryLoad(HistoryRequest request)
 {
+    if (!IsValidHistoryRequest(request)) {
+        historyProgress_ = 0;
+        historyCancelRequested_ = false;
+        {
+            std::lock_guard<std::mutex> lock(snapshotMutex_);
+            snapshot_.historyStatusText = L"履歴日数が不正です";
+            snapshot_.historyRunning = false;
+            snapshot_.historyCancelled = false;
+            snapshot_.historyRecords.clear();
+        }
+        return false;
+    }
+
     if (historyRunning_.exchange(true)) {
-        return;
+        return false;
     }
     if (historyThread_.joinable()) {
         historyThread_.join();
     }
     historyProgress_ = 0;
-    historyThread_ = std::thread(&UpdateCoordinator::HistoryLoop, this, totalSteps);
+    historyCancelRequested_ = false;
+    historyLastErrorCode_ = static_cast<int>(BridgeError::Ok);
+    {
+        std::lock_guard<std::mutex> lock(snapshotMutex_);
+        snapshot_.historyRecords.clear();
+        snapshot_.historyStatusText = L"履歴取得中";
+        snapshot_.historyRunning = true;
+        snapshot_.historyCancelled = false;
+        snapshot_.historyProgress = 0;
+    }
+    historyThread_ = std::thread(&UpdateCoordinator::HistoryLoop, this, request);
+    return true;
 }
 
+/**
+ * @brief Request history loop cancellation.
+ */
+void UpdateCoordinator::CancelHistoryLoad()
+{
+    if (!historyRunning_.load()) {
+        return;
+    }
+    historyCancelRequested_ = true;
+    ++historyCancelCount_;
+    {
+        std::lock_guard<std::mutex> lock(snapshotMutex_);
+        snapshot_.historyStatusText = L"履歴中断要求";
+    }
+}
+
+/**
+ * @brief Clamp and apply selected container index used by normal loop.
+ */
 void UpdateCoordinator::SetSelectedContainer(int containerNo)
 {
     selectedContainerNo_ = containerNo < 1 ? 1 : (containerNo > 100 ? 100 : containerNo);
 }
 
+/**
+ * @brief Snapshot current scheduler outputs with atomics synchronized.
+ */
 UpdateSnapshot UpdateCoordinator::Snapshot() const
 {
     std::lock_guard<std::mutex> lock(snapshotMutex_);
     auto copy = snapshot_;
     copy.historyProgress = historyProgress_.load();
     copy.historyRunning = historyRunning_.load();
+    copy.historyCancelled = snapshot_.historyCancelled;
     return copy;
 }
 
+/**
+ * @brief Collect diagnostics counters and codes.
+ */
 SchedulerMetrics UpdateCoordinator::Metrics() const noexcept
 {
-    return {criticalCycles_.load(),
-            criticalDeadlineMisses_.load(),
-            normalCycles_.load(),
-            lastWriteStartDelayMs_.load(),
-            writeCompletedCount_.load(),
-            static_cast<BridgeError>(lastWriteErrorCode_.load())};
+    SchedulerMetrics metrics;
+    metrics.criticalCycles = criticalCycles_.load();
+    metrics.criticalDeadlineMisses = criticalDeadlineMisses_.load();
+    metrics.normalCycles = normalCycles_.load();
+    metrics.lastWriteStartDelayMs = lastWriteStartDelayMs_.load();
+    metrics.writeCompletedCount = writeCompletedCount_.load();
+    metrics.lastWriteErrorCode = static_cast<BridgeError>(lastWriteErrorCode_.load());
+    metrics.historyReadCount = historyReadCount_.load();
+    metrics.historyErrorCount = historyErrorCount_.load();
+    metrics.historyCancelCount = historyCancelCount_.load();
+    metrics.historyLastErrorCode = static_cast<BridgeError>(historyLastErrorCode_.load());
+    return metrics;
 }
 
+/**
+ * @brief Periodic high-priority cycle reading critical keys.
+ */
 void UpdateCoordinator::CriticalLoop()
 {
 #ifdef _WIN32
@@ -147,6 +264,9 @@ void UpdateCoordinator::CriticalLoop()
     }
 }
 
+/**
+ * @brief Periodic lower-priority UI-facing station update cycle.
+ */
 void UpdateCoordinator::NormalLoop()
 {
 #ifdef _WIN32
@@ -164,6 +284,9 @@ void UpdateCoordinator::NormalLoop()
     }
 }
 
+/**
+ * @brief Serialize write queue and dispatch gateway writes.
+ */
 void UpdateCoordinator::WriteLoop()
 {
     while (running_) {
@@ -186,18 +309,108 @@ void UpdateCoordinator::WriteLoop()
     }
 }
 
-void UpdateCoordinator::HistoryLoop(int totalSteps)
+/**
+ * @brief Append history batch and trim to capped snapshot window.
+ */
+void UpdateCoordinator::AppendHistoryRecords(std::vector<HistoryRecord> records)
+{
+    if (records.empty()) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(snapshotMutex_);
+    auto& snapshotRecords = snapshot_.historyRecords;
+    snapshotRecords.insert(snapshotRecords.end(),
+                           std::make_move_iterator(records.begin()),
+                           std::make_move_iterator(records.end()));
+    if (snapshotRecords.size() > kHistorySnapshotLimit) {
+        snapshotRecords.erase(snapshotRecords.begin(),
+                              snapshotRecords.begin() + static_cast<std::ptrdiff_t>(snapshotRecords.size() - kHistorySnapshotLimit));
+    }
+}
+
+/**
+ * @brief History read worker with per-day/per-record loops and cancellation/error handling.
+ */
+void UpdateCoordinator::HistoryLoop(HistoryRequest request)
 {
 #ifdef _WIN32
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 #endif
-    const int steps = totalSteps <= 0 ? 1 : totalSteps;
-    for (int step = 1; running_ && step <= steps; ++step) {
-        std::wstring ignored;
-        gateway_.Read({4000, step % 366, step % 1000, DataStyle::Raw});
-        historyProgress_ = (step * 100) / steps;
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    const int totalReads = request.days * kHistoryRecordsPerDay;
+    int completedReads = 0;
+    int consecutiveErrors = 0;
+    bool cancelled = false;
+    bool stoppedByErrors = false;
+    std::vector<HistoryRecord> batch;
+    batch.reserve(kHistoryBatchSize);
+
+    for (int dayOffset = 0; running_ && dayOffset < request.days; ++dayOffset) {
+        for (int recordIndex = 0; running_ && recordIndex < kHistoryRecordsPerDay; ++recordIndex) {
+            if (historyCancelRequested_.load()) {
+                cancelled = true;
+                break;
+            }
+
+            const auto value = gateway_.Read(MakeHistoryKey(dayOffset, recordIndex));
+            const bool emptyValue = value.errorCode == BridgeError::Ok && value.displayText.empty();
+            const auto errorCode = emptyValue ? BridgeError::InternalError : value.errorCode;
+            batch.push_back({dayOffset, recordIndex, value.displayText, errorCode, value.stale || emptyValue});
+            ++historyReadCount_;
+            historyLastErrorCode_ = static_cast<int>(errorCode);
+
+            if (errorCode != BridgeError::Ok) {
+                ++historyErrorCount_;
+                ++consecutiveErrors;
+            } else {
+                consecutiveErrors = 0;
+            }
+
+            ++completedReads;
+            historyProgress_ = (completedReads * 100) / totalReads;
+
+            if (batch.size() >= kHistoryBatchSize) {
+                AppendHistoryRecords(std::move(batch));
+                batch.clear();
+                batch.reserve(kHistoryBatchSize);
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+
+            if (consecutiveErrors >= kConsecutiveHistoryErrorLimit) {
+                stoppedByErrors = true;
+                break;
+            }
+        }
+
+        if (cancelled || stoppedByErrors) {
+            break;
+        }
     }
-    historyProgress_ = 100;
+
+    AppendHistoryRecords(std::move(batch));
+
+    if (!running_.load() && !cancelled) {
+        cancelled = true;
+    }
+
+    if (cancelled) {
+        std::lock_guard<std::mutex> lock(snapshotMutex_);
+        snapshot_.historyStatusText = L"履歴中断";
+        snapshot_.historyCancelled = true;
+    } else if (stoppedByErrors) {
+        std::lock_guard<std::mutex> lock(snapshotMutex_);
+        snapshot_.historyStatusText = L"履歴エラー停止: " + ToDisplayText(static_cast<BridgeError>(historyLastErrorCode_.load()));
+        snapshot_.historyCancelled = false;
+    } else {
+        historyProgress_ = 100;
+        std::lock_guard<std::mutex> lock(snapshotMutex_);
+        snapshot_.historyStatusText = L"履歴取得完了";
+        snapshot_.historyCancelled = false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(snapshotMutex_);
+        snapshot_.historyRunning = false;
+        snapshot_.historyProgress = historyProgress_.load();
+    }
     historyRunning_ = false;
 }

@@ -82,6 +82,7 @@
   <ItemGroup>
     <ClInclude Include="MFCApplication7App.h" />
     <ClInclude Include="CustomGridCtrl.h" />
+    <ClInclude Include="HistoryRequestDialog.h" />
     <ClInclude Include="MainDialog.h" />
     <ClInclude Include="OrderEditDialog.h" />
     <ClInclude Include="resource.h" />
@@ -89,6 +90,7 @@
   <ItemGroup>
     <ClCompile Include="MFCApplication7App.cpp" />
     <ClCompile Include="CustomGridCtrl.cpp" />
+    <ClCompile Include="HistoryRequestDialog.cpp" />
     <ClCompile Include="MainDialog.cpp" />
     <ClCompile Include="OrderEditDialog.cpp" />
   </ItemGroup>

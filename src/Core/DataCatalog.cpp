@@ -12,6 +12,11 @@
 #include <windows.h>
 #endif
 
+/**
+ * @file DataCatalog.cpp
+ * @brief JSON catalog parser and runtime catalog validation/build helpers.
+ */
+
 namespace {
 
 struct JsonValue
@@ -273,6 +278,9 @@ private:
     size_t position_{};
 };
 
+/**
+ * @brief Read UTF-8 bytes from catalog file path.
+ */
 std::string ReadAllBytes(const std::wstring& path)
 {
     std::ifstream input(path, std::ios::binary);
@@ -302,6 +310,9 @@ std::wstring Utf8ToWide(const std::string& value)
 #endif
 }
 
+/**
+ * @brief Read and validate required field from JSON object.
+ */
 const JsonValue& RequireField(const JsonValue& object, const char* fieldName)
 {
     if (object.type != JsonValue::Type::Object) {
@@ -356,6 +367,9 @@ int RequireRangeValue(const JsonValue& object, const char* fieldName, const char
     return RequireInt(range, rangeName);
 }
 
+/**
+ * @brief Read style array and convert values to DataStyle enum.
+ */
 std::vector<DataStyle> RequireStyles(const JsonValue& object)
 {
     std::vector<DataStyle> styles;
@@ -381,6 +395,9 @@ std::vector<DataStyle> RawAnd(DataStyle style)
     return {DataStyle::Raw, style};
 }
 
+/**
+ * @brief Build a catalog definition value.
+ */
 DataDefinition Definition(int dataId,
                           const wchar_t* name,
                           bool writable,
@@ -395,6 +412,9 @@ DataDefinition Definition(int dataId,
 
 } // namespace
 
+/**
+ * @brief Build built-in catalog used when external file is absent/invalid.
+ */
 DataCatalog DataCatalog::CreateDefault()
 {
     DataCatalog catalog;
@@ -427,6 +447,9 @@ DataCatalog DataCatalog::CreateDefault()
     return catalog;
 }
 
+/**
+ * @brief Load catalog from file and validate consistency of definitions and critical keys.
+ */
 DataCatalog DataCatalog::LoadFromFile(const std::wstring& path)
 {
     JsonParser parser(ReadAllBytes(path));
@@ -478,16 +501,25 @@ DataCatalog DataCatalog::LoadFromFile(const std::wstring& path)
     return catalog;
 }
 
+/**
+ * @brief Access all known definitions.
+ */
 const std::vector<DataDefinition>& DataCatalog::Definitions() const noexcept
 {
     return definitions_;
 }
 
+/**
+ * @brief Access all configured critical keys.
+ */
 const std::vector<DataKey>& DataCatalog::CriticalKeys() const noexcept
 {
     return criticalKeys_;
 }
 
+/**
+ * @brief Find definition by data id.
+ */
 const DataDefinition* DataCatalog::FindDefinition(int dataId) const noexcept
 {
     const auto found = std::find_if(definitions_.begin(), definitions_.end(), [dataId](const DataDefinition& definition) {
@@ -496,6 +528,9 @@ const DataDefinition* DataCatalog::FindDefinition(int dataId) const noexcept
     return found == definitions_.end() ? nullptr : &(*found);
 }
 
+/**
+ * @brief Validate style against definition's allowed style list.
+ */
 bool DataCatalog::IsStyleAllowed(int dataId, DataStyle style) const noexcept
 {
     const auto* definition = FindDefinition(dataId);
@@ -505,12 +540,18 @@ bool DataCatalog::IsStyleAllowed(int dataId, DataStyle style) const noexcept
     return std::find(definition->allowedStyles.begin(), definition->allowedStyles.end(), style) != definition->allowedStyles.end();
 }
 
+/**
+ * @brief Check writable flag of data definition.
+ */
 bool DataCatalog::IsWritable(int dataId) const noexcept
 {
     const auto* definition = FindDefinition(dataId);
     return definition != nullptr && definition->writable;
 }
 
+/**
+ * @brief Validate key bounds and style.
+ */
 BridgeError DataCatalog::ValidateKey(const DataKey& key) const noexcept
 {
     const auto* definition = FindDefinition(key.dataId);
@@ -527,11 +568,17 @@ BridgeError DataCatalog::ValidateKey(const DataKey& key) const noexcept
     return BridgeError::Ok;
 }
 
+/**
+ * @brief Add a data definition.
+ */
 void DataCatalog::AddDefinition(DataDefinition definition)
 {
     definitions_.push_back(std::move(definition));
 }
 
+/**
+ * @brief Add a critical key for periodic high-priority polling.
+ */
 void DataCatalog::AddCriticalKey(DataKey key)
 {
     criticalKeys_.push_back(key);

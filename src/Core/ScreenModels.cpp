@@ -2,8 +2,16 @@
 
 #include <algorithm>
 
+/**
+ * @file ScreenModels.cpp
+ * @brief Build screen-layer DTOs from gateway data for UI screens.
+ */
+
 namespace {
 
+/**
+ * @brief Convert text data safely to integer; non-numeric returns 0.
+ */
 int ToInt(const std::wstring& value)
 {
     try {
@@ -21,6 +29,9 @@ std::wstring ReadText(const DataGateway& gateway, const DataKey& key)
 
 } // namespace
 
+/**
+ * @brief Build per-container summary including state and visible items.
+ */
 ContainerSummary BuildContainerSummary(const DataGateway& gateway, int containerNo, int maxItems)
 {
     ContainerSummary summary;
@@ -43,6 +54,9 @@ ContainerSummary BuildContainerSummary(const DataGateway& gateway, int container
     return summary;
 }
 
+/**
+ * @brief Build station snapshot with all containers and selected container.
+ */
 StationSnapshot BuildStationSnapshot(const DataGateway& gateway, int selectedContainerNo)
 {
     StationSnapshot snapshot;
@@ -54,6 +68,9 @@ StationSnapshot BuildStationSnapshot(const DataGateway& gateway, int selectedCon
     return snapshot;
 }
 
+/**
+ * @brief Build simplified container list grid for station/list screens.
+ */
 GridModel BuildContainerListGrid(const StationSnapshot& snapshot)
 {
     GridModel grid;
@@ -68,6 +85,9 @@ GridModel BuildContainerListGrid(const StationSnapshot& snapshot)
     return grid;
 }
 
+/**
+ * @brief Build schedule list from visible item rows.
+ */
 GridModel BuildScheduleGrid(const DataGateway& gateway)
 {
     GridModel grid;
@@ -87,6 +107,9 @@ GridModel BuildScheduleGrid(const DataGateway& gateway)
     return grid;
 }
 
+/**
+ * @brief Build maintenance screen rows from fixed definition range.
+ */
 GridModel BuildMaintenanceGrid(const DataGateway& gateway)
 {
     GridModel grid;

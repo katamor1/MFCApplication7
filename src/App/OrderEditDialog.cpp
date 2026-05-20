@@ -5,6 +5,9 @@
 
 namespace {
 
+/**
+ * @brief Convert wide string to CString.
+ */
 CString ToCString(const std::wstring& value)
 {
     return CString(value.c_str());
@@ -31,6 +34,18 @@ bool IsValidOrder(const std::wstring& value)
 
 } // namespace
 
+/**
+ * @file OrderEditDialog.cpp
+ * @brief Implements order edit modal interaction and input validation.
+ */
+
+/**
+ * @brief Construct dialog with editing context and defaults.
+ * @param containerNo Container identifier.
+ * @param itemName Item label for confirmation.
+ * @param currentOrder Current outbound order value.
+ * @param parent Optional parent window.
+ */
 COrderEditDialog::COrderEditDialog(int containerNo, std::wstring itemName, std::wstring currentOrder, CWnd* parent)
     : CDialogEx(IDD_ORDER_EDIT_DIALOG, parent)
     , containerNo_(containerNo)
@@ -40,11 +55,17 @@ COrderEditDialog::COrderEditDialog(int containerNo, std::wstring itemName, std::
 {
 }
 
+/**
+ * @brief Return currently selected order text for caller.
+ */
 std::wstring COrderEditDialog::OrderText() const
 {
     return orderText_;
 }
 
+/**
+ * @brief Initialize dialog controls and pre-fill current value.
+ */
 BOOL COrderEditDialog::OnInitDialog()
 {
     CDialogEx::OnInitDialog();
@@ -64,6 +85,9 @@ BOOL COrderEditDialog::OnInitDialog()
     return FALSE;
 }
 
+/**
+ * @brief Validate input before accepting and close dialog.
+ */
 void COrderEditDialog::OnOK()
 {
     CString value;

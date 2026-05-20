@@ -1,15 +1,24 @@
 #include "MainDialog.h"
 
+#include "HistoryRequestDialog.h"
 #include "OrderEditDialog.h"
 
 #include <algorithm>
 #include <sstream>
+
+/**
+ * @file MainDialog.cpp
+ * @brief Main screen orchestration: timer updates, screen switching, and rendering.
+ */
 
 namespace {
 
 constexpr UINT_PTR kRefreshTimerId = 1;
 constexpr UINT kRefreshIntervalMs = 33;
 
+/**
+ * @brief Resolve current screen title for status output.
+ */
 const wchar_t* ScreenName(MainScreenId screen)
 {
     switch (screen) {
@@ -44,6 +53,9 @@ BEGIN_MESSAGE_MAP(CMainDialog, CDialogEx)
     ON_NOTIFY(LVN_ITEMCHANGED, IDC_CONTENT_LIST, &CMainDialog::OnListItemChanged)
 END_MESSAGE_MAP()
 
+/**
+ * @brief Construct main dialog with startup bridge options.
+ */
 CMainDialog::CMainDialog(BridgeFactoryOptions options)
     : CDialogEx(IDD_MFCAPPLICATION7_DIALOG)
     , catalog_(LoadConfiguredCatalogOrDefault(options.catalogPath))
@@ -52,6 +64,9 @@ CMainDialog::CMainDialog(BridgeFactoryOptions options)
 {
 }
 
+/**
+ * @brief Stop scheduler when dialog is destroyed.
+ */
 CMainDialog::~CMainDialog()
 {
     if (coordinator_) {
@@ -59,6 +74,9 @@ CMainDialog::~CMainDialog()
     }
 }
 
+/**
+ * @brief Build controls and start periodic refresh on initialization.
+ */
 BOOL CMainDialog::OnInitDialog()
 {
     CDialogEx::OnInitDialog();
@@ -73,10 +91,16 @@ BOOL CMainDialog::OnInitDialog()
     return TRUE;
 }
 
+/**
+ * @brief Close action intentionally disabled for modal command consistency.
+ */
 void CMainDialog::OnOK()
 {
 }
 
+/**
+ * @brief Stop coordinator and close dialog.
+ */
 void CMainDialog::OnCancel()
 {
     if (coordinator_) {
@@ -85,6 +109,9 @@ void CMainDialog::OnCancel()
     CDialogEx::OnCancel();
 }
 
+/**
+ * @brief Drive periodic refresh processing from refresh timer.
+ */
 void CMainDialog::OnTimer(UINT_PTR eventId)
 {
     if (eventId == kRefreshTimerId) {
@@ -103,18 +130,35 @@ void CMainDialog::OnSize(UINT type, int cx, int cy)
     }
 }
 
+/**
+ * @brief Route navigation command buttons into screen changes.
+ */
 void CMainDialog::OnNavCommand(UINT id)
 {
     const auto index = static_cast<int>(id - IDC_NAV_BASE);
     SwitchScreen(static_cast<MainScreenId>(index));
 }
 
+/**
+ * @brief Dispatch system/schedule/station function-bar actions based on current screen.
+ */
 void CMainDialog::OnFunctionCommand(UINT id)
 {
     const auto slot = static_cast<int>(id - IDC_FUNCTION_BASE) + 1;
-    if (currentScreen_ == MainScreenId::System && slot == 1 && coordinator_) {
-        coordinator_->StartHistoryLoad(180);
-        RefreshUi(true);
+    if (currentScreen_ == MainScreenId::System && coordinator_) {
+        if (slot == 1) {
+            CHistoryRequestDialog dialog(this);
+            if (dialog.DoModal() == IDOK) {
+                coordinator_->StartHistoryLoad(dialog.Request());
+                RefreshUi(true);
+            }
+            return;
+        }
+        if (slot == 2) {
+            coordinator_->CancelHistoryLoad();
+            RefreshUi(true);
+            return;
+        }
         return;
     }
 
@@ -138,12 +182,18 @@ void CMainDialog::OnFunctionCommand(UINT id)
     }
 }
 
+/**
+ * @brief Toggle nav pane expansion mode for compact/expanded layout.
+ */
 void CMainDialog::OnNavExpand()
 {
     navExpanded_ = !navExpanded_;
     LayoutControls();
 }
 
+/**
+ * @brief Update selected container and coordinator binding when selection changes.
+ */
 void CMainDialog::OnListItemChanged(NMHDR* notify, LRESULT* result)
 {
     const auto* change = reinterpret_cast<NMLISTVIEW*>(notify);
@@ -158,6 +208,9 @@ void CMainDialog::OnListItemChanged(NMHDR* notify, LRESULT* result)
     *result = 0;
 }
 
+/**
+ * @brief Create all UI controls and default labels for each screen group.
+ */
 void CMainDialog::CreateControls()
 {
     statusText_.Create(L"COM未接続", WS_CHILD | WS_VISIBLE | SS_LEFT, CRect(0, 0, 0, 0), this, IDC_STATUS_TEXT);
@@ -180,6 +233,9 @@ void CMainDialog::CreateControls()
     }
 }
 
+/**
+ * @brief Apply responsive layout each render cycle and screen transition.
+ */
 void CMainDialog::LayoutControls()
 {
     CRect client;
@@ -217,6 +273,9 @@ void CMainDialog::LayoutControls()
     }
 }
 
+/**
+ * @brief Connect gateway and launch scheduler threads.
+ */
 void CMainDialog::ConnectAndStart()
 {
     DataGateway gateway(bridge_);
@@ -230,6 +289,9 @@ void CMainDialog::ConnectAndStart()
     coordinator_->Start();
 }
 
+/**
+ * @brief Refresh status/function bar and optionally grid from latest coordinator snapshot.
+ */
 void CMainDialog::RefreshUi(bool forceGrid)
 {
     if (!coordinator_) {
@@ -248,6 +310,9 @@ void CMainDialog::RefreshUi(bool forceGrid)
     }
 }
 
+/**
+ * @brief Render top status line and progress bar from snapshot and metrics.
+ */
 void CMainDialog::RefreshStatus(const UpdateSnapshot& snapshot)
 {
     const auto metrics = coordinator_->Metrics();
@@ -261,6 +326,15 @@ void CMainDialog::RefreshStatus(const UpdateSnapshot& snapshot)
         text << L" / Write完了: " << metrics.writeCompletedCount;
         text << L" / 最終Write結果: " << ToDisplayText(metrics.lastWriteErrorCode);
     }
+    if (!snapshot.historyStatusText.empty()) {
+        text << L" / 履歴: " << snapshot.historyStatusText;
+        text << L" " << snapshot.historyProgress << L"%";
+        text << L" / 履歴Read: " << metrics.historyReadCount;
+        if (metrics.historyErrorCount > 0) {
+            text << L" / 履歴エラー: " << metrics.historyErrorCount
+                 << L"(" << ToDisplayText(metrics.historyLastErrorCode) << L")";
+        }
+    }
     if (!snapshot.criticalValues.empty() && snapshot.criticalValues.front().errorCode != BridgeError::Ok) {
         text << L" / " << ToDisplayText(snapshot.criticalValues.front().errorCode);
     }
@@ -268,6 +342,9 @@ void CMainDialog::RefreshStatus(const UpdateSnapshot& snapshot)
     historyProgress_.SetPos(snapshot.historyProgress);
 }
 
+/**
+ * @brief Recompute function bar button labels and enabled states.
+ */
 void CMainDialog::RefreshFunctions(const UpdateSnapshot& snapshot)
 {
     std::vector<FunctionAction> actions;
@@ -293,6 +370,9 @@ void CMainDialog::RefreshFunctions(const UpdateSnapshot& snapshot)
     }
 }
 
+/**
+ * @brief Switch current view screen and force a fresh render.
+ */
 void CMainDialog::SwitchScreen(MainScreenId screen)
 {
     currentScreen_ = screen;
@@ -301,6 +381,9 @@ void CMainDialog::SwitchScreen(MainScreenId screen)
     RefreshUi(true);
 }
 
+/**
+ * @brief Build grid content for current screen from snapshot/gateway.
+ */
 void CMainDialog::PopulateCurrentScreen(const UpdateSnapshot& snapshot)
 {
     DataGateway gateway(bridge_);
@@ -316,9 +399,18 @@ void CMainDialog::PopulateCurrentScreen(const UpdateSnapshot& snapshot)
         break;
     case MainScreenId::System: {
         GridModel grid;
-        grid.SetColumns({L"機能", L"状態", L"備考"});
-        grid.AddRow({GridCell::Text(L"出庫履歴取得"), GridCell::Text(snapshot.historyRunning ? L"取得中" : L"待機"), GridCell::Text(L"F1で開始")});
-        grid.AddRow({GridCell::Text(L"COMモック"), GridCell::Text(L"接続済"), GridCell::Text(L"正式COMへ差し替え可能")});
+        grid.SetColumns({L"日オフセット", L"番号", L"値", L"状態"});
+        std::wstring status = snapshot.historyStatusText.empty() ? L"待機" : snapshot.historyStatusText;
+        status += L" " + std::to_wstring(snapshot.historyProgress) + L"%";
+        grid.AddRow({GridCell::Text(L"状態"), GridCell::Text(L""), GridCell::Text(status), GridCell::Text(snapshot.historyRunning ? L"取得中" : L"待機")});
+        for (const auto& record : snapshot.historyRecords) {
+            grid.AddRow({
+                GridCell::Text(std::to_wstring(record.dayOffset)),
+                GridCell::Text(std::to_wstring(record.recordIndex)),
+                GridCell::Text(record.displayText),
+                GridCell::Text(record.stale ? ToDisplayText(record.errorCode) : L"OK"),
+            });
+        }
         PopulateGrid(grid);
         break;
     }
@@ -328,11 +420,17 @@ void CMainDialog::PopulateCurrentScreen(const UpdateSnapshot& snapshot)
     }
 }
 
+/**
+ * @brief Apply a prepared grid model to the list control.
+ */
 void CMainDialog::PopulateGrid(const GridModel& grid)
 {
     contentList_.ApplyModel(grid);
 }
 
+/**
+ * @brief Populate station screen list + detail side text for selected container.
+ */
 void CMainDialog::PopulateStation(const StationSnapshot& snapshot)
 {
     PopulateGrid(BuildContainerListGrid(snapshot));
@@ -348,6 +446,9 @@ void CMainDialog::PopulateStation(const StationSnapshot& snapshot)
     detailText_.SetWindowText(ToCString(detail.str()));
 }
 
+/**
+ * @brief Open detail message for selected schedule row.
+ */
 void CMainDialog::ShowScheduleDetails(int row)
 {
     if (row < 0) {
@@ -364,6 +465,9 @@ void CMainDialog::ShowScheduleDetails(int row)
     AfxMessageBox(message, MB_OK | MB_ICONINFORMATION);
 }
 
+/**
+ * @brief Open edit dialog and write changed order value back to coordinator queue.
+ */
 void CMainDialog::ChangeScheduleOrder(int row)
 {
     if (row < 0 || coordinator_ == nullptr) {
@@ -386,6 +490,9 @@ void CMainDialog::ChangeScheduleOrder(int row)
     RefreshUi(false);
 }
 
+/**
+ * @brief Return localized label for current screen.
+ */
 CString CMainDialog::ScreenTitle() const
 {
     return CString(ScreenName(currentScreen_));

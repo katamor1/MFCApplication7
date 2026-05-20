@@ -198,6 +198,57 @@ bool WaitForWriteCount(const UpdateCoordinator& coordinator, int minimumCount)
     return false;
 }
 
+bool WaitForHistoryStop(const UpdateCoordinator& coordinator)
+{
+    for (int attempt = 0; attempt < 500; ++attempt) {
+        if (!coordinator.Snapshot().historyRunning) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
+}
+
+bool WaitForHistoryProgress(const UpdateCoordinator& coordinator)
+{
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        const auto snapshot = coordinator.Snapshot();
+        if (snapshot.historyRunning && snapshot.historyProgress > 0) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
+}
+
+void TestHistoryRequestValidation()
+{
+    Check(!IsValidHistoryRequest({0}), "history days 0 should be rejected");
+    Check(IsValidHistoryRequest({1}), "history days 1 should be accepted");
+    Check(IsValidHistoryRequest({365}), "history days 365 should be accepted");
+    Check(!IsValidHistoryRequest({366}), "history days 366 should be rejected");
+}
+
+void TestHistoryKeyGenerationUsesOutboundHistoryId()
+{
+    const auto key = MakeHistoryKey(2, 345);
+    Check(key.dataId == 4000, "history key should read dataId 4000");
+    Check(key.subId1 == 2, "history key should use day offset as subId1");
+    Check(key.subId2 == 345, "history key should use record index as subId2");
+    Check(key.style == DataStyle::Raw, "history key should use raw style");
+}
+
+void TestSystemFunctionActionsReflectHistoryRunning()
+{
+    const auto idle = BuildSystemFunctionActions(false);
+    Check(idle[0].enabled && idle[0].id == L"history", "system F1 should start history while idle");
+    Check(!idle[1].enabled, "system F2 should be disabled while idle");
+
+    const auto running = BuildSystemFunctionActions(true);
+    Check(!running[0].enabled, "system F1 should be disabled while history is running");
+    Check(running[1].enabled && running[1].id == L"history-cancel", "system F2 should cancel running history");
+}
+
 void TestUpdateCoordinatorRecordsSuccessfulWriteMetrics()
 {
     auto catalog = DataCatalog::CreateDefault();
@@ -235,6 +286,95 @@ void TestUpdateCoordinatorRecordsReadOnlyWriteError()
     const auto metrics = coordinator.Metrics();
     Check(metrics.writeCompletedCount == 1, "coordinator should count failed write completion");
     Check(metrics.lastWriteErrorCode == BridgeError::ReadOnly, "coordinator should preserve read-only write error");
+}
+
+void TestUpdateCoordinatorCancelsHistoryLoad()
+{
+    auto catalog = DataCatalog::CreateDefault();
+    auto bridge = std::make_shared<MockBackendBridge>(catalog);
+    DataGateway gateway(bridge);
+    Check(gateway.Connect(L"127.0.0.1") == BridgeError::Ok, "gateway connect should succeed");
+
+    UpdateCoordinator coordinator(catalog, gateway);
+    coordinator.Start();
+    Check(coordinator.StartHistoryLoad({3}), "valid history request should start");
+    Check(WaitForHistoryProgress(coordinator), "history should report progress before cancellation");
+    coordinator.CancelHistoryLoad();
+    Check(WaitForHistoryStop(coordinator), "history should stop after cancellation");
+    coordinator.Stop();
+
+    const auto snapshot = coordinator.Snapshot();
+    const auto metrics = coordinator.Metrics();
+    Check(!snapshot.historyRunning, "history should not be running after cancellation");
+    Check(snapshot.historyCancelled, "snapshot should mark cancellation");
+    Check(snapshot.historyStatusText == L"履歴中断", "snapshot should expose cancel status text");
+    Check(metrics.historyCancelCount == 1, "metrics should count history cancellations");
+}
+
+void TestUpdateCoordinatorCapsHistoryRecords()
+{
+    auto catalog = DataCatalog::CreateDefault();
+    auto bridge = std::make_shared<MockBackendBridge>(catalog);
+    DataGateway gateway(bridge);
+    Check(gateway.Connect(L"127.0.0.1") == BridgeError::Ok, "gateway connect should succeed");
+
+    UpdateCoordinator coordinator(catalog, gateway);
+    coordinator.Start();
+    Check(coordinator.StartHistoryLoad({1}), "one day history should start");
+    Check(WaitForHistoryStop(coordinator), "one day history should finish");
+    coordinator.Stop();
+
+    const auto snapshot = coordinator.Snapshot();
+    const auto metrics = coordinator.Metrics();
+    Check(snapshot.historyProgress == 100, "completed history should be 100 percent");
+    Check(snapshot.historyStatusText == L"履歴取得完了", "completed history should expose completion status");
+    Check(snapshot.historyRecords.size() == 500, "snapshot should retain latest 500 history records");
+    Check(snapshot.historyRecords.front().recordIndex == 500, "history cap should drop earliest records");
+    Check(snapshot.historyRecords.back().recordIndex == 999, "history cap should retain latest record");
+    Check(metrics.historyReadCount == 1000, "metrics should count history reads");
+    Check(metrics.historyErrorCount == 0, "mock history should not record read errors");
+    Check(metrics.historyLastErrorCode == BridgeError::Ok, "mock history should finish with ok error code");
+}
+
+void TestHistoryLoadRejectsInvalidRequestBeforeCommunication()
+{
+    auto catalog = DataCatalog::CreateDefault();
+    auto bridge = std::make_shared<MockBackendBridge>(catalog);
+    DataGateway gateway(bridge);
+    Check(gateway.Connect(L"127.0.0.1") == BridgeError::Ok, "gateway connect should succeed");
+
+    UpdateCoordinator coordinator(catalog, gateway);
+    coordinator.Start();
+    Check(!coordinator.StartHistoryLoad({0}), "invalid history request should be rejected");
+    coordinator.Stop();
+
+    const auto snapshot = coordinator.Snapshot();
+    const auto metrics = coordinator.Metrics();
+    Check(!snapshot.historyRunning, "invalid history request should not start");
+    Check(snapshot.historyStatusText == L"履歴日数が不正です", "invalid history request should expose status");
+    Check(metrics.historyReadCount == 0, "invalid history request should not read backend");
+}
+
+void TestHistoryLoadKeepsWritePriorityResponsive()
+{
+    auto catalog = DataCatalog::CreateDefault();
+    auto bridge = std::make_shared<MockBackendBridge>(catalog);
+    DataGateway gateway(bridge);
+    Check(gateway.Connect(L"127.0.0.1") == BridgeError::Ok, "gateway connect should succeed");
+
+    UpdateCoordinator coordinator(catalog, gateway);
+    coordinator.Start();
+    Check(coordinator.StartHistoryLoad({3}), "history should start");
+    coordinator.RequestWrite({2103, 1, 1, DataStyle::Raw}, L"2468");
+    Check(WaitForWriteCount(coordinator, 1), "write should complete while history is running");
+    coordinator.CancelHistoryLoad();
+    Check(WaitForHistoryStop(coordinator), "history should stop after cancellation");
+    coordinator.Stop();
+
+    const auto metrics = coordinator.Metrics();
+    Check(metrics.writeCompletedCount == 1, "write should complete during history");
+    Check(metrics.lastWriteErrorCode == BridgeError::Ok, "write should succeed during history");
+    Check(metrics.lastWriteStartDelayMs >= 0 && metrics.lastWriteStartDelayMs <= 100, "history should not delay write start over 100ms");
 }
 
 void TestPriorityQueueOrdersCriticalBeforeNormalAndHistory()
@@ -278,11 +418,18 @@ int wmain()
         TestGatewayMarksErrorsAsStale,
         TestFunctionActionsReflectSelection,
         TestScheduleFunctionActionsExposeOrderChangeOnlyForSelection,
+        TestSystemFunctionActionsReflectHistoryRunning,
         TestGridModelKeepsCellKinds,
         TestScheduleGridBindsRowsToContainerItems,
         TestMockWriteUpdatesScheduleOrderReadback,
+        TestHistoryRequestValidation,
+        TestHistoryKeyGenerationUsesOutboundHistoryId,
         TestUpdateCoordinatorRecordsSuccessfulWriteMetrics,
         TestUpdateCoordinatorRecordsReadOnlyWriteError,
+        TestUpdateCoordinatorCancelsHistoryLoad,
+        TestUpdateCoordinatorCapsHistoryRecords,
+        TestHistoryLoadRejectsInvalidRequestBeforeCommunication,
+        TestHistoryLoadKeepsWritePriorityResponsive,
         TestPriorityQueueOrdersCriticalBeforeNormalAndHistory,
         TestScreenSnapshotBuildsContainerSummary,
     };

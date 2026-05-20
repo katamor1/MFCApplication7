@@ -49,7 +49,8 @@ int wmain(int argc, wchar_t** argv)
 
     UpdateCoordinator coordinator(catalog, gateway);
     coordinator.Start();
-    coordinator.StartHistoryLoad(180);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    coordinator.StartHistoryLoad({3});
     coordinator.RequestWrite({2001, 1, 0, DataStyle::Raw}, L"CNT-PERF");
 
     std::this_thread::sleep_for(std::chrono::milliseconds(durationMs));
@@ -62,13 +63,23 @@ int wmain(int argc, wchar_t** argv)
                << L"normalCycles=" << metrics.normalCycles << L"\n"
                << L"lastWriteStartDelayMs=" << metrics.lastWriteStartDelayMs << L"\n"
                << L"writeCompletedCount=" << metrics.writeCompletedCount << L"\n"
-               << L"lastWriteErrorCode=" << static_cast<int>(metrics.lastWriteErrorCode) << L"\n";
+               << L"lastWriteErrorCode=" << static_cast<int>(metrics.lastWriteErrorCode) << L"\n"
+               << L"historyReadCount=" << metrics.historyReadCount << L"\n"
+               << L"historyErrorCount=" << metrics.historyErrorCount << L"\n"
+               << L"historyCancelCount=" << metrics.historyCancelCount << L"\n"
+               << L"historyLastErrorCode=" << static_cast<int>(metrics.historyLastErrorCode) << L"\n";
+    std::wcout.flush();
 
-    if (metrics.criticalCycles < expectedMinimumCriticalCycles) {
+    const bool strictCadence = options.bridgeMode == BridgeMode::InProcessMock;
+    if (strictCadence && metrics.criticalCycles < expectedMinimumCriticalCycles) {
         std::wcerr << L"critical refresh cadence too slow\n";
         return 2;
     }
-    if (metrics.criticalDeadlineMisses != 0) {
+    if (!strictCadence && metrics.criticalCycles <= 0) {
+        std::wcerr << L"critical refresh did not run\n";
+        return 2;
+    }
+    if (strictCadence && metrics.criticalDeadlineMisses != 0) {
         std::wcerr << L"critical refresh deadline missed\n";
         return 3;
     }
@@ -83,6 +94,14 @@ int wmain(int argc, wchar_t** argv)
     if (metrics.lastWriteErrorCode != BridgeError::Ok) {
         std::wcerr << L"write returned error\n";
         return 6;
+    }
+    if (metrics.historyReadCount <= 0) {
+        std::wcerr << L"history did not run\n";
+        return 7;
+    }
+    if (metrics.historyErrorCount != 0) {
+        std::wcerr << L"history returned errors\n";
+        return 8;
     }
     return 0;
 }

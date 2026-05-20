@@ -1,11 +1,13 @@
 #include "MockBackendBridge.h"
 
 #include <iomanip>
-#include <shared_mutex>
 #include <sstream>
 
 namespace {
 
+/**
+ * @brief Parse integer-like string; fallback 0 on parse errors.
+ */
 long long ParseInteger(const std::wstring& text)
 {
     try {
@@ -39,6 +41,9 @@ std::wstring FormatThousands(long long value)
     return formatted;
 }
 
+/**
+ * @brief Convert seconds to HH:MM:SS for display.
+ */
 std::wstring FormatSeconds(long long seconds)
 {
     const auto hours = seconds / 3600;
@@ -50,6 +55,9 @@ std::wstring FormatSeconds(long long seconds)
     return stream.str();
 }
 
+/**
+ * @brief Convert integer millimeters to inch text.
+ */
 std::wstring FormatInches(long long millimeters)
 {
     const double inches = static_cast<double>(millimeters) / 25.4;
@@ -58,6 +66,9 @@ std::wstring FormatInches(long long millimeters)
     return stream.str();
 }
 
+/**
+ * @brief Return pseudo container state for synthetic seed data.
+ */
 std::wstring ContainerState(int containerNo)
 {
     if (containerNo % 29 == 0) {
@@ -75,6 +86,9 @@ std::wstring ContainerState(int containerNo)
     return L"空";
 }
 
+/**
+ * @brief Return pseudo item count for synthetic seed data.
+ */
 int ItemCount(int containerNo)
 {
     return ContainerState(containerNo) == L"コンテナなし" ? 0 : (containerNo % 10) + 1;
@@ -82,14 +96,24 @@ int ItemCount(int containerNo)
 
 } // namespace
 
+/**
+ * @file MockBackendBridge.cpp
+ * @brief In-process mock backend bridge implementation used for standalone testing.
+ */
+
+/**
+ * @brief Construct bridge with catalog constraints used during validation.
+ */
 MockBackendBridge::MockBackendBridge(DataCatalog catalog)
     : catalog_(std::move(catalog))
 {
 }
 
+/**
+ * @brief Accept only minimally valid dotted IPv4-like addresses.
+ */
 BridgeError MockBackendBridge::Connect(const std::wstring& ipAddress)
 {
-    std::unique_lock<std::shared_mutex> lock(mutex_);
     if (ipAddress.empty() || ipAddress.find(L'.') == std::wstring::npos) {
         connected_ = false;
         return BridgeError::InvalidIpAddress;
@@ -100,8 +124,7 @@ BridgeError MockBackendBridge::Connect(const std::wstring& ipAddress)
 
 BridgeError MockBackendBridge::Read(const DataKey& key, std::wstring& value)
 {
-    std::shared_lock<std::shared_mutex> lock(mutex_);
-    if (!connected_) {
+    if (!connected_.load()) {
         value.clear();
         return BridgeError::NotConnected;
     }
@@ -112,16 +135,29 @@ BridgeError MockBackendBridge::Read(const DataKey& key, std::wstring& value)
         return validation;
     }
 
-    const auto overrideValue = overrides_.find(key);
-    const auto rawValue = overrideValue == overrides_.end() ? RawValue(key) : overrideValue->second;
+    std::wstring rawValue;
+    bool hasOverride = false;
+    {
+        std::lock_guard<std::mutex> lock(overridesMutex_);
+        const auto overrideValue = overrides_.find(key);
+        if (overrideValue != overrides_.end()) {
+            rawValue = overrideValue->second;
+            hasOverride = true;
+        }
+    }
+    if (!hasOverride) {
+        rawValue = RawValue(key);
+    }
     value = FormatValue(rawValue, key.style);
     return BridgeError::Ok;
 }
 
+/**
+ * @brief Write only when connected and key is writable.
+ */
 BridgeError MockBackendBridge::Write(const DataKey& key, const std::wstring& value)
 {
-    std::unique_lock<std::shared_mutex> lock(mutex_);
-    if (!connected_) {
+    if (!connected_.load()) {
         return BridgeError::NotConnected;
     }
 
@@ -135,10 +171,14 @@ BridgeError MockBackendBridge::Write(const DataKey& key, const std::wstring& val
         return BridgeError::ReadOnly;
     }
 
+    std::lock_guard<std::mutex> lock(overridesMutex_);
     overrides_[key] = value;
     return BridgeError::Ok;
 }
 
+/**
+ * @brief Generate deterministic synthetic value for testing/preview.
+ */
 std::wstring MockBackendBridge::RawValue(const DataKey& key) const
 {
     if (key.dataId >= 1000 && key.dataId < 1020) {
@@ -187,6 +227,9 @@ std::wstring MockBackendBridge::RawValue(const DataKey& key) const
     }
 }
 
+/**
+ * @brief Apply style conversions for display.
+ */
 std::wstring MockBackendBridge::FormatValue(const std::wstring& rawValue, DataStyle style) const
 {
     switch (style) {

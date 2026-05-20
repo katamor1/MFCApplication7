@@ -7,8 +7,16 @@
 #include <stdexcept>
 #include <vector>
 
+/**
+ * @file BridgeFactory.cpp
+ * @brief Parse startup options and create selected backend bridge implementation.
+ */
+
 namespace {
 
+/**
+ * @brief Convert option token to lowercase.
+ */
 std::wstring ToLower(std::wstring value)
 {
     for (auto& ch : value) {
@@ -17,6 +25,9 @@ std::wstring ToLower(std::wstring value)
     return value;
 }
 
+/**
+ * @brief Extract /Option: value from command line if present.
+ */
 std::wstring OptionValue(const std::wstring& commandLine, const wchar_t* optionName)
 {
     const std::wstring lowerCommand = ToLower(commandLine);
@@ -40,6 +51,9 @@ std::wstring OptionValue(const std::wstring& commandLine, const wchar_t* optionN
 
 } // namespace
 
+/**
+ * @brief Load catalog from configured file, fallback to built-in catalog on failure.
+ */
 DataCatalog LoadConfiguredCatalogOrDefault(const std::wstring& catalogPath)
 {
     if (!catalogPath.empty()) {
@@ -51,6 +65,9 @@ DataCatalog LoadConfiguredCatalogOrDefault(const std::wstring& catalogPath)
     return DataCatalog::CreateDefault();
 }
 
+/**
+ * @brief Instantiate COM or mock bridge according to parsed options.
+ */
 std::shared_ptr<IBackendBridge> CreateBackendBridge(const BridgeFactoryOptions& options)
 {
     const auto catalog = LoadConfiguredCatalogOrDefault(options.catalogPath);
@@ -60,6 +77,9 @@ std::shared_ptr<IBackendBridge> CreateBackendBridge(const BridgeFactoryOptions& 
     return std::make_shared<MockBackendBridge>(catalog);
 }
 
+/**
+ * @brief Parse command-line flags into bridge options.
+ */
 BridgeFactoryOptions ParseBridgeFactoryOptions(const std::wstring& commandLine)
 {
     BridgeFactoryOptions options;

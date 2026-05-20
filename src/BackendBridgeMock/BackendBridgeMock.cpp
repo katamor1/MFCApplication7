@@ -19,6 +19,14 @@ CBackendBridgeMockModule _AtlModule;
 
 namespace {
 
+/**
+ * @file BackendBridgeMock.cpp
+ * @brief ATL in-process COM server implementation for the mock backend bridge.
+ */
+
+/**
+ * @brief Convert to lower-case for command line and dispatch-name matching.
+ */
 std::wstring ToLower(std::wstring value)
 {
     for (auto& ch : value) {
@@ -27,11 +35,17 @@ std::wstring ToLower(std::wstring value)
     return value;
 }
 
+/**
+ * @brief Check command line has an argument token.
+ */
 bool HasArgument(const std::wstring& command, const wchar_t* argument)
 {
     return ToLower(command).find(ToLower(argument)) != std::wstring::npos;
 }
 
+/**
+ * @brief Map numeric style value to DataStyle enum.
+ */
 DataStyle ToStyle(LONG style)
 {
     switch (style) {
@@ -48,6 +62,9 @@ DataStyle ToStyle(LONG style)
     }
 }
 
+/**
+ * @brief Validate style value from COM caller.
+ */
 bool IsKnownStyle(LONG style)
 {
     return style >= 0 && style <= 3;
@@ -57,6 +74,9 @@ constexpr DISPID DispatchIdConnect = 1;
 constexpr DISPID DispatchIdRead = 2;
 constexpr DISPID DispatchIdWrite = 3;
 
+/**
+ * @brief Read argument at zero-based logical position from reversed DISPPARAMS order.
+ */
 VARIANTARG* NaturalArgument(DISPPARAMS* parameters, UINT index)
 {
     if (parameters == nullptr || parameters->rgvarg == nullptr || index >= parameters->cArgs) {
@@ -65,6 +85,9 @@ VARIANTARG* NaturalArgument(DISPPARAMS* parameters, UINT index)
     return &parameters->rgvarg[parameters->cArgs - index - 1];
 }
 
+/**
+ * @brief Convert VARIANT to LONG with type coercion.
+ */
 bool VariantToLong(const VARIANTARG& argument, LONG& value)
 {
     ATL::CComVariant converted;
@@ -75,6 +98,9 @@ bool VariantToLong(const VARIANTARG& argument, LONG& value)
     return true;
 }
 
+/**
+ * @brief Convert VARIANT to wide string with fallback conversion.
+ */
 bool VariantToString(const VARIANTARG& argument, std::wstring& value)
 {
     if (argument.vt == VT_BSTR) {
@@ -90,6 +116,9 @@ bool VariantToString(const VARIANTARG& argument, std::wstring& value)
     return true;
 }
 
+/**
+ * @brief Write integer result into VARIANT return channel.
+ */
 HRESULT SetLongResult(VARIANT* result, LONG value)
 {
     if (result != nullptr) {
@@ -100,12 +129,18 @@ HRESULT SetLongResult(VARIANT* result, LONG value)
     return S_OK;
 }
 
+/**
+ * @brief Shared singleton for COM dispatch handlers.
+ */
 MockBackendBridge& SharedComBridge()
 {
     static MockBackendBridge bridge(DataCatalog::CreateDefault());
     return bridge;
 }
 
+/**
+ * @brief In-process smoke test for mock bridge methods.
+ */
 int RunSelfTest()
 {
     auto catalog = DataCatalog::CreateDefault();
@@ -127,6 +162,9 @@ int RunSelfTest()
     return 0;
 }
 
+/**
+ * @brief Resolve module path used for LocalServer registration.
+ */
 std::wstring ModulePath()
 {
     std::wstring path(MAX_PATH, L'\0');
@@ -135,6 +173,9 @@ std::wstring ModulePath()
     return path;
 }
 
+/**
+ * @brief Write REG_SZ value under given registry key.
+ */
 LONG SetStringValue(HKEY root, const std::wstring& subKey, const wchar_t* valueName, const std::wstring& value)
 {
     HKEY key{};
@@ -148,6 +189,9 @@ LONG SetStringValue(HKEY root, const std::wstring& subKey, const wchar_t* valueN
     return setResult;
 }
 
+/**
+ * @brief Register COM class/progID under HKCU.
+ */
 int RegisterLocalServer()
 {
     const std::wstring clsid = L"{A737D261-91BC-4646-B58E-9E8B53378D6F}";
@@ -173,6 +217,9 @@ int RegisterLocalServer()
     return 0;
 }
 
+/**
+ * @brief Unregister COM class/progID under HKCU.
+ */
 int UnregisterLocalServer()
 {
     RegDeleteTreeW(HKEY_CURRENT_USER, L"Software\\Classes\\MFCApplication7.BackendBridgeMock");
@@ -180,6 +227,9 @@ int UnregisterLocalServer()
     return 0;
 }
 
+/**
+ * @brief Register COM server and run COM invocation smoke checks.
+ */
 int RunComSelfTest()
 {
     const auto registerResult = RegisterLocalServer();
@@ -221,6 +271,9 @@ class ATL_NO_VTABLE CBackendBridge
     , public IBackendBridgeCom
 {
 public:
+    /**
+     * @brief Construct COM bridge object.
+     */
     CBackendBridge()
     {
     }
@@ -232,6 +285,9 @@ public:
         COM_INTERFACE_ENTRY(IDispatch)
     END_COM_MAP()
 
+    /**
+     * @brief COM call entrypoint for Connect.
+     */
     HRESULT STDMETHODCALLTYPE Connect(BSTR ipAddress, LONG* errorCode) override
     {
         if (errorCode == nullptr) {
@@ -241,6 +297,9 @@ public:
         return S_OK;
     }
 
+    /**
+     * @brief COM call entrypoint for Read.
+     */
     HRESULT STDMETHODCALLTYPE Read(LONG dataId, LONG subId1, LONG subId2, LONG style, BSTR* value, LONG* errorCode) override
     {
         if (value == nullptr || errorCode == nullptr) {
@@ -260,6 +319,9 @@ public:
         return S_OK;
     }
 
+    /**
+     * @brief COM call entrypoint for Write.
+     */
     HRESULT STDMETHODCALLTYPE Write(LONG dataId, LONG subId1, LONG subId2, LONG style, BSTR value, LONG* errorCode) override
     {
         if (errorCode == nullptr) {
@@ -414,6 +476,9 @@ public:
 
 OBJECT_ENTRY_AUTO(__uuidof(BackendBridgeComClass), CBackendBridge)
 
+/**
+ * @brief Process startup arguments and run test/registration/main loops.
+ */
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR commandLine, int showCommand)
 {
     const std::wstring command = commandLine == nullptr ? L"" : commandLine;

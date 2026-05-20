@@ -2,6 +2,9 @@
 
 namespace {
 
+/**
+ * @brief Convert wide string to an MFC CString.
+ */
 CString ToCString(const std::wstring& value)
 {
     return CString(value.c_str());
@@ -9,6 +12,15 @@ CString ToCString(const std::wstring& value)
 
 } // namespace
 
+/**
+ * @file CustomGridCtrl.cpp
+ * @brief Implements grid control rendering and cell/binding query helpers.
+ */
+
+/**
+ * @brief Apply a full model snapshot into the list control view.
+ * @param model Display model to render.
+ */
 void CCustomGridCtrl::ApplyModel(const GridModel& model)
 {
     model_ = model;
@@ -33,6 +45,12 @@ void CCustomGridCtrl::ApplyModel(const GridModel& model)
     }
 }
 
+/**
+ * @brief Return editable kind for one cell coordinate.
+ * @param row Row index.
+ * @param column Column index.
+ * @return Cell kind for rendering and edit policy.
+ */
 CellKind CCustomGridCtrl::CellKindAt(int row, int column) const
 {
     if (row < 0 || column < 0 || row >= static_cast<int>(model_.Rows().size())) {
@@ -45,6 +63,11 @@ CellKind CCustomGridCtrl::CellKindAt(int row, int column) const
     return cells[column].kind;
 }
 
+/**
+ * @brief Return row binding for command handlers.
+ * @param row Row index.
+ * @return Bound payload (container/item mapping) or default values if out of range.
+ */
 GridRowBinding CCustomGridCtrl::RowBindingAt(int row) const
 {
     if (row < 0 || row >= static_cast<int>(model_.Rows().size())) {

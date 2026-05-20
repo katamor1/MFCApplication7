@@ -6,6 +6,9 @@
 
 namespace {
 
+/**
+ * @brief Per-thread COM state used to cache initialized and connected dispatch object.
+ */
 struct ThreadComState
 {
     ~ThreadComState()
@@ -24,6 +27,9 @@ struct ThreadComState
     ATL::CComPtr<IDispatch> bridge;
 };
 
+/**
+ * @brief Cast enum style to legacy LONG.
+ */
 LONG ToStyleValue(DataStyle style)
 {
     return static_cast<LONG>(style);
@@ -46,6 +52,9 @@ BridgeError FromLong(LONG value)
     }
 }
 
+/**
+ * @brief Convert HRESULT/Variant result to bridge error code.
+ */
 BridgeError FromDispatchResult(HRESULT hr, ATL::CComVariant& result)
 {
     if (FAILED(hr)) {
@@ -57,12 +66,18 @@ BridgeError FromDispatchResult(HRESULT hr, ATL::CComVariant& result)
     return FromLong(result.lVal);
 }
 
+/**
+ * @brief Resolve named member ID for IDispatch object.
+ */
 HRESULT ResolveDispatchId(IDispatch* dispatch, const wchar_t* name, DISPID& dispatchId)
 {
     auto* mutableName = const_cast<LPOLESTR>(name);
     return dispatch->GetIDsOfNames(IID_NULL, &mutableName, 1, LOCALE_USER_DEFAULT, &dispatchId);
 }
 
+/**
+ * @brief Prepare VT_I4 argument.
+ */
 void SetLongArgument(ATL::CComVariant& argument, LONG value)
 {
     argument.Clear();
@@ -70,6 +85,9 @@ void SetLongArgument(ATL::CComVariant& argument, LONG value)
     argument.lVal = value;
 }
 
+/**
+ * @brief Prepare VT_BSTR argument.
+ */
 void SetStringArgument(ATL::CComVariant& argument, const std::wstring& value)
 {
     argument.Clear();
@@ -79,11 +97,22 @@ void SetStringArgument(ATL::CComVariant& argument, const std::wstring& value)
 
 } // namespace
 
+/**
+ * @file ComBackendBridge.cpp
+ * @brief COM bridge adapter translating IDispatch calls to internal backend operations.
+ */
+
+/**
+ * @brief Construct COM bridge with target progId.
+ */
 ComBackendBridge::ComBackendBridge(std::wstring progId)
     : progId_(std::move(progId))
 {
 }
 
+/**
+ * @brief Dispose of cached thread-local COM state.
+ */
 ComBackendBridge::~ComBackendBridge()
 {
 }
@@ -105,6 +134,9 @@ BridgeError ComBackendBridge::Connect(const std::wstring& ipAddress)
     return error;
 }
 
+/**
+ * @brief Invoke Connect member on COM object if present.
+ */
 BridgeError ComBackendBridge::InvokeConnect(IDispatch* dispatch, const std::wstring& ipAddress)
 {
     DISPID dispatchId{};
@@ -120,6 +152,9 @@ BridgeError ComBackendBridge::InvokeConnect(IDispatch* dispatch, const std::wstr
     return FromDispatchResult(hr, result);
 }
 
+/**
+ * @brief Read value via COM and convert HRESULT into bridge status.
+ */
 BridgeError ComBackendBridge::Read(const DataKey& key, std::wstring& value)
 {
     ATL::CComPtr<IDispatch> dispatch;
@@ -157,6 +192,9 @@ BridgeError ComBackendBridge::Read(const DataKey& key, std::wstring& value)
     return BridgeError::Ok;
 }
 
+/**
+ * @brief Write value via COM and return status.
+ */
 BridgeError ComBackendBridge::Write(const DataKey& key, const std::wstring& value)
 {
     ATL::CComPtr<IDispatch> dispatch;
@@ -183,6 +221,9 @@ BridgeError ComBackendBridge::Write(const DataKey& key, const std::wstring& valu
     return FromDispatchResult(hr, result);
 }
 
+/**
+ * @brief Obtain COM object; initialize COM and reconnect when needed.
+ */
 BridgeError ComBackendBridge::EnsureObject(ATL::CComPtr<IDispatch>& dispatch, bool connectIfNeeded)
 {
     thread_local ThreadComState state;

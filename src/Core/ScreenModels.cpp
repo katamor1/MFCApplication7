@@ -21,11 +21,37 @@ int ToInt(const std::wstring& value)
     }
 }
 
+/**
+ * @brief Parse a strictly positive integer order value.
+ */
+bool TryParsePositiveInt(const std::wstring& value, int& parsed)
+{
+    try {
+        size_t index = 0;
+        const int result = std::stoi(value, &index);
+        if (index != value.size() || result <= 0) {
+            return false;
+        }
+        parsed = result;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 std::wstring ReadText(const DataGateway& gateway, const DataKey& key)
 {
     const auto value = gateway.Read(key);
     return value.errorCode == BridgeError::Ok ? value.displayText : L"[" + ToDisplayText(value.errorCode) + L"]";
 }
+
+struct ScheduleGridEntry
+{
+    std::vector<GridCell> cells;
+    GridRowBinding binding;
+    int order{};
+    bool validOrder{false};
+};
 
 } // namespace
 
@@ -93,8 +119,7 @@ GridModel BuildContainerListGrid(const StationSnapshot& snapshot)
  */
 GridModel BuildScheduleGrid(const DataGateway& gateway)
 {
-    GridModel grid;
-    grid.SetColumns({L"コンテナ", L"品目名", L"出庫終了予定", L"順序"});
+    std::vector<ScheduleGridEntry> entries;
     for (int containerNo = 1; containerNo <= 100; ++containerNo) {
         const int itemCount = ToInt(ReadText(gateway, {2003, containerNo, 0, DataStyle::Raw}));
         for (int itemNo = 1; itemNo <= std::min(itemCount, 1000); ++itemNo) {
@@ -102,16 +127,72 @@ GridModel BuildScheduleGrid(const DataGateway& gateway)
             if (itemName.empty()) {
                 continue;
             }
-            grid.AddRow({
+            const auto orderText = ReadText(gateway, {2103, containerNo, itemNo, DataStyle::Raw});
+            int order = 0;
+            const bool validOrder = TryParsePositiveInt(orderText, order);
+            entries.push_back({
+                {
                 GridCell::Text(std::to_wstring(containerNo)),
                 GridCell::Text(itemName),
                 GridCell::Text(ReadText(gateway, {3000, containerNo, itemNo, DataStyle::Raw})),
-                GridCell::Text(ReadText(gateway, {2103, containerNo, itemNo, DataStyle::Raw}), CellKind::Spin),
-            },
-            {containerNo, itemNo});
+                GridCell::Text(orderText, CellKind::Spin),
+                },
+                {containerNo, itemNo},
+                order,
+                validOrder,
+            });
         }
     }
+
+    std::sort(entries.begin(), entries.end(), [](const ScheduleGridEntry& left, const ScheduleGridEntry& right) {
+        if (left.validOrder != right.validOrder) {
+            return left.validOrder;
+        }
+        if (left.validOrder && left.order != right.order) {
+            return left.order < right.order;
+        }
+        if (left.binding.containerNo != right.binding.containerNo) {
+            return left.binding.containerNo < right.binding.containerNo;
+        }
+        return left.binding.itemNo < right.binding.itemNo;
+    });
+
+    GridModel grid;
+    grid.SetColumns({L"コンテナ", L"品目名", L"出庫終了予定", L"順序"});
+    for (auto& entry : entries) {
+        grid.AddRow(std::move(entry.cells), entry.binding);
+    }
     return grid;
+}
+
+/**
+ * @brief Build the two order writes needed to swap selected row with previous visible row.
+ */
+std::vector<ScheduleOrderWrite> BuildScheduleMoveUpWrites(const GridModel& grid, int selectedRow)
+{
+    if (selectedRow <= 0 || selectedRow >= static_cast<int>(grid.Rows().size())) {
+        return {};
+    }
+
+    const auto& previous = grid.Rows()[static_cast<size_t>(selectedRow - 1)];
+    const auto& selected = grid.Rows()[static_cast<size_t>(selectedRow)];
+    if (previous.binding.containerNo <= 0 || previous.binding.itemNo <= 0 ||
+        selected.binding.containerNo <= 0 || selected.binding.itemNo <= 0 ||
+        previous.cells.size() <= 3 || selected.cells.size() <= 3) {
+        return {};
+    }
+
+    int previousOrder = 0;
+    int selectedOrder = 0;
+    if (!TryParsePositiveInt(previous.cells[3].text, previousOrder) ||
+        !TryParsePositiveInt(selected.cells[3].text, selectedOrder)) {
+        return {};
+    }
+
+    return {
+        {{2103, selected.binding.containerNo, selected.binding.itemNo, DataStyle::Raw}, std::to_wstring(previousOrder)},
+        {{2103, previous.binding.containerNo, previous.binding.itemNo, DataStyle::Raw}, std::to_wstring(selectedOrder)},
+    };
 }
 
 /**

@@ -46,15 +46,30 @@ std::vector<FunctionAction> BuildContainerFunctionActions(bool hasSelection, boo
 /**
  * @brief Build function bar actions for schedule screen.
  * @param hasSelection Whether an item row is selected.
+ * @param canMoveUp Whether the selected row can be swapped with the previous visible row.
  */
-std::vector<FunctionAction> BuildScheduleFunctionActions(bool hasSelection)
+std::vector<FunctionAction> BuildScheduleFunctionActions(bool hasSelection, bool canMoveUp)
 {
     auto actions = EightSlots();
     actions[0] = {1, L"details", L"詳細", hasSelection};
     actions[1] = {2, L"order-change", L"順序変更", hasSelection};
     actions[2] = {3, L"add", L"追加", true};
     actions[3] = {4, L"delete", L"削除", hasSelection};
+    actions[4] = {5, L"move-up", L"繰上げ", hasSelection && canMoveUp};
     return actions;
+}
+
+/**
+ * @brief Map VK_F1..VK_F8 to function bar slots.
+ */
+int FunctionSlotFromVirtualKey(int virtualKey) noexcept
+{
+    constexpr int firstFunctionKey = 0x70;
+    constexpr int lastFunctionKey = 0x77;
+    if (virtualKey < firstFunctionKey || virtualKey > lastFunctionKey) {
+        return 0;
+    }
+    return virtualKey - firstFunctionKey + 1;
 }
 
 /**

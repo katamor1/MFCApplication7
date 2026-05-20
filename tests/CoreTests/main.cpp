@@ -179,23 +179,40 @@ void TestFunctionActionsReflectSelection()
 }
 
 /**
+ * @brief Verify keyboard F1-F8 values map to function bar slots.
+ */
+void TestFunctionSlotFromVirtualKey()
+{
+    for (int index = 0; index < 8; ++index) {
+        Check(FunctionSlotFromVirtualKey(0x70 + index) == index + 1, "F1-F8 virtual keys should map to slots 1-8");
+    }
+    Check(FunctionSlotFromVirtualKey(0x6F) == 0, "key before F1 should not map to a function slot");
+    Check(FunctionSlotFromVirtualKey(0x78) == 0, "key after F8 should not map to a function slot");
+}
+
+/**
  * @brief Verify schedule actions expose order changes only with a selection.
  */
 void TestScheduleFunctionActionsExposeOrderChangeOnlyForSelection()
 {
-    const auto none = BuildScheduleFunctionActions(false);
+    const auto none = BuildScheduleFunctionActions(false, false);
     Check(none.size() == 8, "schedule actions should always expose 8 slots");
     Check(!none[0].enabled, "schedule details should be disabled without selection");
     Check(!none[1].enabled, "schedule order change should be disabled without selection");
     Check(none[2].enabled && none[2].id == L"add", "schedule add should be enabled without selection");
     Check(!none[3].enabled, "schedule delete should be disabled without selection");
+    Check(!none[4].enabled, "schedule move-up should be disabled without selection");
 
-    const auto selected = BuildScheduleFunctionActions(true);
+    const auto selected = BuildScheduleFunctionActions(true, true);
     Check(selected[0].enabled && selected[0].id == L"details", "schedule details should be enabled with selection");
     Check(selected[1].enabled && selected[1].id == L"order-change", "schedule F2 should edit order with selection");
     Check(selected[1].label == L"順序変更", "schedule F2 should be labeled for order change");
     Check(selected[2].enabled && selected[2].id == L"add", "schedule F3 should add schedule rows");
     Check(selected[3].enabled && selected[3].id == L"delete", "schedule F4 should delete selected rows");
+    Check(selected[4].enabled && selected[4].id == L"move-up", "schedule F5 should move selected rows up");
+
+    const auto first = BuildScheduleFunctionActions(true, false);
+    Check(!first[4].enabled, "schedule F5 should be disabled for first row");
 }
 
 /**
@@ -232,6 +249,33 @@ void TestScheduleGridBindsRowsToContainerItems()
     Check(firstRow.binding.itemNo == 1, "first schedule row should bind item 1");
     Check(firstRow.cells.size() == 4, "schedule row should keep four cells");
     Check(firstRow.cells[3].kind == CellKind::Spin, "schedule order cell should remain spin kind");
+}
+
+/**
+ * @brief Verify schedule grid sorts by outbound order then container/item.
+ */
+void TestScheduleGridSortsByOutboundOrder()
+{
+    auto catalog = DataCatalog::CreateDefault();
+    auto bridge = std::make_shared<MockBackendBridge>(catalog);
+    DataGateway gateway(bridge);
+    Check(gateway.Connect(L"127.0.0.1") == BridgeError::Ok, "gateway connect should succeed");
+
+    Check(gateway.Write({2103, 10, 1, DataStyle::Raw}, L"1") == BridgeError::Ok, "test row should accept low order");
+    Check(gateway.Write({2103, 1, 1, DataStyle::Raw}, L"9000") == BridgeError::Ok, "test row should accept high order");
+    Check(gateway.Write({2103, 2, 1, DataStyle::Raw}, L"1") == BridgeError::Ok, "tie row should accept low order");
+
+    const auto grid = BuildScheduleGrid(gateway);
+    Check(grid.RowCount() > 2, "schedule grid should contain sorted rows");
+    Check(grid.Rows()[0].binding.containerNo == 2 && grid.Rows()[0].binding.itemNo == 1, "tie sort should use container/item order first");
+    Check(grid.Rows()[1].binding.containerNo == 10 && grid.Rows()[1].binding.itemNo == 1, "low order row should sort before default rows");
+
+    int previousOrder = 0;
+    for (const auto& row : grid.Rows()) {
+        const int currentOrder = std::stoi(row.cells[3].text);
+        Check(currentOrder >= previousOrder, "schedule rows should be non-decreasing by order");
+        previousOrder = currentOrder;
+    }
 }
 
 /**
@@ -296,6 +340,33 @@ void TestMockScheduleAddAndDeleteReflectInGrid()
 
     Check(gateway.Write({2105, 1, 3, DataStyle::Raw}, L"1") == BridgeError::Ok, "schedule delete write should succeed");
     Check(!HasScheduleRow(BuildScheduleGrid(gateway), 1, 3), "deleted schedule row should disappear from grid");
+}
+
+/**
+ * @brief Verify move-up writes swap selected and previous row orders.
+ */
+void TestBuildScheduleMoveUpWrites()
+{
+    GridModel grid;
+    grid.SetColumns({L"コンテナ", L"品目名", L"出庫終了予定", L"順序"});
+    grid.AddRow({GridCell::Text(L"1"), GridCell::Text(L"A"), GridCell::Text(L""), GridCell::Text(L"10", CellKind::Spin)}, {1, 1});
+    grid.AddRow({GridCell::Text(L"2"), GridCell::Text(L"B"), GridCell::Text(L""), GridCell::Text(L"20", CellKind::Spin)}, {2, 1});
+
+    const auto writes = BuildScheduleMoveUpWrites(grid, 1);
+    Check(writes.size() == 2, "move-up should emit two order writes");
+    Check(writes[0].key == DataKey{2103, 2, 1, DataStyle::Raw}, "selected row should receive previous order");
+    Check(writes[0].value == L"10", "selected row should write previous order value");
+    Check(writes[1].key == DataKey{2103, 1, 1, DataStyle::Raw}, "previous row should receive selected order");
+    Check(writes[1].value == L"20", "previous row should write selected order value");
+
+    Check(BuildScheduleMoveUpWrites(grid, 0).empty(), "first row should not move up");
+    Check(BuildScheduleMoveUpWrites(grid, -1).empty(), "negative row should not move up");
+
+    GridModel invalidGrid;
+    invalidGrid.SetColumns({L"コンテナ", L"品目名", L"出庫終了予定", L"順序"});
+    invalidGrid.AddRow({GridCell::Text(L"1"), GridCell::Text(L"A"), GridCell::Text(L""), GridCell::Text(L"bad", CellKind::Spin)}, {1, 1});
+    invalidGrid.AddRow({GridCell::Text(L"2"), GridCell::Text(L"B"), GridCell::Text(L""), GridCell::Text(L"20", CellKind::Spin)}, {2, 1});
+    Check(BuildScheduleMoveUpWrites(invalidGrid, 1).empty(), "non-numeric order should not move up");
 }
 
 /**
@@ -404,6 +475,7 @@ void TestUpdateCoordinatorRecordsSuccessfulWriteMetrics()
     const auto metrics = coordinator.Metrics();
     Check(metrics.writeCompletedCount == 1, "coordinator should record one write completion");
     Check(metrics.lastWriteErrorCode == BridgeError::Ok, "coordinator should record successful write error code");
+    Check(metrics.scheduleOrderWriteCompletedCount == 1, "coordinator should count schedule order writes");
     Check(metrics.lastWriteStartDelayMs >= 0 && metrics.lastWriteStartDelayMs <= 100, "write should start within 100ms");
     const auto value = gateway.Read({2103, 1, 1, DataStyle::Raw});
     Check(value.displayText == L"6789", "coordinator write should update backend value");
@@ -608,12 +680,15 @@ int wmain()
         TestMockBridgeFormatsValuesAndRejectsInvalidStyle,
         TestGatewayMarksErrorsAsStale,
         TestFunctionActionsReflectSelection,
+        TestFunctionSlotFromVirtualKey,
         TestScheduleFunctionActionsExposeOrderChangeOnlyForSelection,
         TestSystemFunctionActionsReflectHistoryRunning,
         TestGridModelKeepsCellKinds,
         TestScheduleGridBindsRowsToContainerItems,
+        TestScheduleGridSortsByOutboundOrder,
         TestMockWriteUpdatesScheduleOrderReadback,
         TestMockScheduleAddAndDeleteReflectInGrid,
+        TestBuildScheduleMoveUpWrites,
         TestHistoryRequestValidation,
         TestHistoryKeyGenerationUsesOutboundHistoryId,
         TestUpdateCoordinatorRecordsSuccessfulWriteMetrics,

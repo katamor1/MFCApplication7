@@ -57,13 +57,14 @@
 | Station / ContainerList | F1 | 詳細 | 選択あり、かつコンテナなしでない | メッセージボックスで詳細表示予定を通知する。 |
 | Schedule | F1 | 詳細 | 行選択あり | メッセージボックスで詳細表示予定を通知する。 |
 | Schedule | F2 | 順序変更 | 行選択あり | `OrderEditDialog` を開き、`2103` へ Write 要求を積む。 |
-| Schedule | F3 | 追加 | 常に無効 | 未実装。 |
-| Schedule | F4 | 削除 | 常に無効 | 未実装。 |
+| Schedule | F3 | 追加 | 常に有効 | `ScheduleAddDialog` を開き、`2104` へ Write 要求を積む。 |
+| Schedule | F4 | 削除 | 行選択あり | `ScheduleDeleteConfirmDialog` を開き、`2105` へ Write 要求を積む。 |
+| Schedule | F5 | 繰上げ | 行選択あり、かつ直前表示行と順序入れ替え可能 | 選択行と直前表示行の `2103` raw 値を2件 Write して入れ替える。 |
 | System | F1 | 履歴取得 / 取得中 | 履歴停止中 | `HistoryRequestDialog` を開き、履歴取得を開始する。 |
 | System | F2 | 中断 | 履歴実行中 | 履歴取得キャンセルを要求する。 |
 | Maintenance | 全枠 | 空 | 無効 | 現行操作なし。 |
 
-現行コードには `VK_F1` から `VK_F8` のキーボード入力をボタン操作へ変換する `PreTranslateMessage` 等はありません。したがって、キーボードのファンクションキー連動は未実装です。
+`CMainDialog::PreTranslateMessage()` は `VK_F1` から `VK_F8` を `FunctionSlotFromVirtualKey()` で F1-F8 のスロットへ変換し、有効な画面下部ボタンと同じ `OnFunctionCommand()` へ流します。無効なファンクション操作に対応するキー入力は何もしません。
 
 ## グリッド表示
 
@@ -99,9 +100,11 @@
 
 `BuildScheduleGrid()` により、全コンテナを走査して品目行を作ります。出庫順序列は `CellKind::Spin` としてモデル化されます。
 
-現行では出庫順序によるソートは行っていません。コンテナ番号、品目番号のループ順で表示されます。
+表示行は `2103` の raw 値を正の整数として解釈し、出庫順序の昇順に並べます。同じ順序の場合は containerNo、itemNo の昇順で安定表示します。非数値または0以下の順序は末尾へ送ります。
 
 F2 順序変更では、選択行の `GridRowBinding` から containerNo と itemNo を取り出し、`2103` へ raw style で Write 要求を積みます。Write 完了数が変わると、次回 UI 更新でグリッド再構築が強制されます。
+
+F5 繰上げでは、選択行と直前表示行の `2103` raw 値を入れ替える2件の Write 要求を積みます。先頭行、無効 binding、非数値順序ではF5は無効です。
 
 ### システム画面
 

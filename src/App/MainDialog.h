@@ -52,6 +52,10 @@ protected:
      * @brief ダイアログ閉じる時に更新ループを停止する。
      */
     void OnCancel() override;
+    /**
+     * @brief キーボードF1-F8を画面下部ファンクション操作へ接続する。
+     */
+    BOOL PreTranslateMessage(MSG* message) override;
 
     /**
      * @brief 33ms 周期の再描画トリガーを受け取り UI を更新する。
@@ -130,6 +134,10 @@ private:
      */
     void ChangeScheduleOrder(int row);
     /**
+     * @brief 選択行を直前表示行へ繰り上げるWriteを要求する。
+     */
+    void MoveScheduleItemUp(int row);
+    /**
      * @brief 出庫予定追加を要求する。
      */
     void AddScheduleItem();
@@ -137,6 +145,10 @@ private:
      * @brief 選択行の出庫予定削除を要求する。
      */
     void DeleteScheduleItem(int row);
+    /**
+     * @brief 現在のスケジュール選択が繰上げ可能か判定する。
+     */
+    bool CanMoveScheduleSelectionUp() const;
     /**
      * @brief 現在画面の表示名を取得する。
      */

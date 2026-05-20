@@ -112,6 +112,24 @@ void CMainDialog::OnCancel()
 }
 
 /**
+ * @brief Route physical F1-F8 key presses to enabled function buttons.
+ */
+BOOL CMainDialog::PreTranslateMessage(MSG* message)
+{
+    if (message != nullptr && message->message == WM_KEYDOWN) {
+        const int slot = FunctionSlotFromVirtualKey(static_cast<int>(message->wParam));
+        if (slot >= 1 && slot <= static_cast<int>(functionButtons_.size())) {
+            const auto index = static_cast<size_t>(slot - 1);
+            if (functionButtons_[index].GetSafeHwnd() != nullptr && functionButtons_[index].IsWindowEnabled()) {
+                OnFunctionCommand(IDC_FUNCTION_BASE + static_cast<UINT>(index));
+            }
+            return TRUE;
+        }
+    }
+    return CDialogEx::PreTranslateMessage(message);
+}
+
+/**
  * @brief Drive periodic refresh processing from refresh timer.
  */
 void CMainDialog::OnTimer(UINT_PTR eventId)
@@ -181,6 +199,10 @@ void CMainDialog::OnFunctionCommand(UINT id)
         }
         if (slot == 4) {
             DeleteScheduleItem(selectedRow);
+            return;
+        }
+        if (slot == 5) {
+            MoveScheduleItemUp(selectedRow);
             return;
         }
     }
@@ -366,7 +388,8 @@ void CMainDialog::RefreshFunctions(const UpdateSnapshot& snapshot)
     if (currentScreen_ == MainScreenId::Station || currentScreen_ == MainScreenId::ContainerList) {
         actions = BuildContainerFunctionActions(true, snapshot.station.selected.missing);
     } else if (currentScreen_ == MainScreenId::Schedule) {
-        actions = BuildScheduleFunctionActions(contentList_.GetFirstSelectedItemPosition() != nullptr);
+        const bool hasSelection = contentList_.GetFirstSelectedItemPosition() != nullptr;
+        actions = BuildScheduleFunctionActions(hasSelection, hasSelection && CanMoveScheduleSelectionUp());
     } else if (currentScreen_ == MainScreenId::System) {
         actions = BuildSystemFunctionActions(snapshot.historyRunning);
     } else {
@@ -506,6 +529,24 @@ void CMainDialog::ChangeScheduleOrder(int row)
 }
 
 /**
+ * @brief Enqueue the two writes needed for schedule order move-up.
+ */
+void CMainDialog::MoveScheduleItemUp(int row)
+{
+    if (row < 0 || coordinator_ == nullptr) {
+        return;
+    }
+
+    const auto writes = BuildScheduleMoveUpWrites(contentList_.Model(), row);
+    for (const auto& write : writes) {
+        coordinator_->RequestWrite(write.key, write.value);
+    }
+    if (!writes.empty()) {
+        RefreshUi(false);
+    }
+}
+
+/**
  * @brief Open add dialog and enqueue a provisional schedule add write.
  */
 void CMainDialog::AddScheduleItem()
@@ -547,6 +588,19 @@ void CMainDialog::DeleteScheduleItem(int row)
 
     coordinator_->RequestWrite({2105, binding.containerNo, binding.itemNo, DataStyle::Raw}, L"1");
     RefreshUi(false);
+}
+
+/**
+ * @brief Check whether selected schedule row can swap with the previous visible row.
+ */
+bool CMainDialog::CanMoveScheduleSelectionUp() const
+{
+    POSITION position = contentList_.GetFirstSelectedItemPosition();
+    if (position == nullptr) {
+        return false;
+    }
+    const int selectedRow = contentList_.GetNextSelectedItem(position);
+    return !BuildScheduleMoveUpWrites(contentList_.Model(), selectedRow).empty();
 }
 
 /**

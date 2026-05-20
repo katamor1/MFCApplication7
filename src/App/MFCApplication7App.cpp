@@ -59,6 +59,20 @@ bool HasScheduleRow(const GridModel& grid, int containerNo, int itemNo)
 }
 
 /**
+ * @brief Return the visible schedule row index for a bound item.
+ */
+int ScheduleRowIndex(const GridModel& grid, int containerNo, int itemNo)
+{
+    for (size_t index = 0; index < grid.Rows().size(); ++index) {
+        const auto& binding = grid.Rows()[index].binding;
+        if (binding.containerNo == containerNo && binding.itemNo == itemNo) {
+            return static_cast<int>(index);
+        }
+    }
+    return -1;
+}
+
+/**
  * @brief Poll until history load begins and reports progress.
  */
 bool WaitForHistoryProgress(const UpdateCoordinator& coordinator)
@@ -224,9 +238,71 @@ int RunScheduleMutationSmoke(const BridgeFactoryOptions& options)
 }
 
 /**
+ * @brief Run schedule order sort and move-up write smoke test.
+ */
+int RunScheduleOrderSmoke(const BridgeFactoryOptions& options)
+{
+    const auto catalog = LoadConfiguredCatalogOrDefault(options.catalogPath);
+    auto bridge = CreateBackendBridge(options);
+    DataGateway gateway(bridge);
+    if (gateway.Connect(options.ipAddress) != BridgeError::Ok) {
+        return 300;
+    }
+
+    UpdateCoordinator coordinator(catalog, gateway);
+    coordinator.Start();
+    coordinator.RequestWrite({2103, 1, 1, DataStyle::Raw}, L"9000");
+    coordinator.RequestWrite({2103, 2, 1, DataStyle::Raw}, L"1");
+    coordinator.RequestWrite({2103, 10, 1, DataStyle::Raw}, L"2");
+    if (!WaitForWriteCount(coordinator, 3)) {
+        coordinator.Stop();
+        return 310;
+    }
+
+    auto grid = BuildScheduleGrid(gateway);
+    if (grid.RowCount() < 2 ||
+        grid.Rows()[0].binding.containerNo != 2 || grid.Rows()[0].binding.itemNo != 1 ||
+        grid.Rows()[1].binding.containerNo != 10 || grid.Rows()[1].binding.itemNo != 1) {
+        coordinator.Stop();
+        return 320;
+    }
+
+    const int targetRow = ScheduleRowIndex(grid, 10, 1);
+    const auto writes = BuildScheduleMoveUpWrites(grid, targetRow);
+    if (writes.size() != 2) {
+        coordinator.Stop();
+        return 330;
+    }
+    for (const auto& write : writes) {
+        coordinator.RequestWrite(write.key, write.value);
+    }
+    if (!WaitForWriteCount(coordinator, 5)) {
+        coordinator.Stop();
+        return 340;
+    }
+
+    grid = BuildScheduleGrid(gateway);
+    coordinator.Stop();
+    if (grid.RowCount() < 2 ||
+        grid.Rows()[0].binding.containerNo != 10 || grid.Rows()[0].binding.itemNo != 1 ||
+        grid.Rows()[1].binding.containerNo != 2 || grid.Rows()[1].binding.itemNo != 1) {
+        return 350;
+    }
+
+    const auto metrics = coordinator.Metrics();
+    if (metrics.lastWriteStartDelayMs < 0 || metrics.lastWriteStartDelayMs > 100) {
+        return 360;
+    }
+    if (metrics.lastWriteErrorCode != BridgeError::Ok || metrics.scheduleOrderWriteCompletedCount < 5) {
+        return 370;
+    }
+    return 0;
+}
+
+/**
  * @brief Run core behavior checks and optional smoke subtests.
  */
-int RunSelfTest(const BridgeFactoryOptions& options, bool writeSmoke, bool historySmoke, bool scheduleMutationSmoke)
+int RunSelfTest(const BridgeFactoryOptions& options, bool writeSmoke, bool historySmoke, bool scheduleMutationSmoke, bool scheduleOrderSmoke)
 {
     auto bridge = CreateBackendBridge(options);
     DataGateway gateway(bridge);
@@ -253,6 +329,9 @@ int RunSelfTest(const BridgeFactoryOptions& options, bool writeSmoke, bool histo
     if (scheduleMutationSmoke) {
         return RunScheduleMutationSmoke(options);
     }
+    if (scheduleOrderSmoke) {
+        return RunScheduleOrderSmoke(options);
+    }
     return 0;
 }
 
@@ -276,7 +355,8 @@ BOOL CMFCApplication7App::InitInstance()
         ::ExitProcess(static_cast<UINT>(RunSelfTest(bridgeOptions,
                                                     HasArgument(commandLine, L"/WriteSmoke"),
                                                     HasArgument(commandLine, L"/HistorySmoke"),
-                                                    HasArgument(commandLine, L"/ScheduleMutationSmoke"))));
+                                                    HasArgument(commandLine, L"/ScheduleMutationSmoke"),
+                                                    HasArgument(commandLine, L"/ScheduleOrderSmoke"))));
     }
 
     CMainDialog dialog(bridgeOptions);

@@ -52,6 +52,15 @@ struct StationSnapshot
 };
 
 /**
+ * @brief スケジュール順序入れ替えで発行するWrite要求。
+ */
+struct ScheduleOrderWrite
+{
+    DataKey key;
+    std::wstring value;
+};
+
+/**
  * @brief 1コンテナ分の表示情報を読み取りし生成する。
  */
 ContainerSummary BuildContainerSummary(const DataGateway& gateway, int containerNo, int maxItems);
@@ -67,6 +76,10 @@ GridModel BuildContainerListGrid(const StationSnapshot& snapshot);
  * @brief スケジュール画面向けのグリッドデータを構築する。
  */
 GridModel BuildScheduleGrid(const DataGateway& gateway);
+/**
+ * @brief 選択行を直前表示行へ繰り上げるための順序Writeを組み立てる。
+ */
+std::vector<ScheduleOrderWrite> BuildScheduleMoveUpWrites(const GridModel& grid, int selectedRow);
 /**
  * @brief メンテナンス画面向けのグリッドデータを構築する。
  */

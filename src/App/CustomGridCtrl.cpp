@@ -75,3 +75,11 @@ GridRowBinding CCustomGridCtrl::RowBindingAt(int row) const
     }
     return model_.Rows()[row].binding;
 }
+
+/**
+ * @brief Return current model for command helpers that need visible-row order.
+ */
+const GridModel& CCustomGridCtrl::Model() const noexcept
+{
+    return model_;
+}

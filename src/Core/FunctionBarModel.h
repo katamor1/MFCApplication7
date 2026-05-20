@@ -31,7 +31,12 @@ std::vector<FunctionAction> BuildContainerFunctionActions(bool hasSelection, boo
 /**
  * @brief スケジュール画面用アクションを構築する。
  */
-std::vector<FunctionAction> BuildScheduleFunctionActions(bool hasSelection);
+std::vector<FunctionAction> BuildScheduleFunctionActions(bool hasSelection, bool canMoveUp);
+
+/**
+ * @brief Windows 仮想キーから F1-F8 のスロット番号へ変換する。
+ */
+int FunctionSlotFromVirtualKey(int virtualKey) noexcept;
 
 /**
  * @brief システム画面用アクションを構築する。

@@ -22,6 +22,10 @@ public:
      * @brief 指定行のバインド情報を返す。
      */
     GridRowBinding RowBindingAt(int row) const;
+    /**
+     * @brief 現在表示中のモデルを返す。
+     */
+    const GridModel& Model() const noexcept;
 
 private:
     GridModel model_;

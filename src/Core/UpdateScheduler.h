@@ -119,6 +119,7 @@ struct SchedulerMetrics
     long long lastWriteStartDelayMs{-1};
     int writeCompletedCount{};
     BridgeError lastWriteErrorCode{BridgeError::Ok};
+    int scheduleOrderWriteCompletedCount{};
     int scheduleAddCompletedCount{};
     int scheduleDeleteCompletedCount{};
     BridgeError lastScheduleMutationErrorCode{BridgeError::Ok};
@@ -216,6 +217,7 @@ private:
     std::atomic<long long> lastWriteStartDelayMs_{-1};
     std::atomic<int> writeCompletedCount_{0};
     std::atomic<int> lastWriteErrorCode_{static_cast<int>(BridgeError::Ok)};
+    std::atomic<int> scheduleOrderWriteCompletedCount_{0};
     std::atomic<int> scheduleAddCompletedCount_{0};
     std::atomic<int> scheduleDeleteCompletedCount_{0};
     std::atomic<int> lastScheduleMutationErrorCode_{static_cast<int>(BridgeError::Ok)};

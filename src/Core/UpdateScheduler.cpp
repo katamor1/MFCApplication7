@@ -262,6 +262,7 @@ SchedulerMetrics UpdateCoordinator::Metrics() const noexcept
     metrics.lastWriteStartDelayMs = lastWriteStartDelayMs_.load();
     metrics.writeCompletedCount = writeCompletedCount_.load();
     metrics.lastWriteErrorCode = static_cast<BridgeError>(lastWriteErrorCode_.load());
+    metrics.scheduleOrderWriteCompletedCount = scheduleOrderWriteCompletedCount_.load();
     metrics.scheduleAddCompletedCount = scheduleAddCompletedCount_.load();
     metrics.scheduleDeleteCompletedCount = scheduleDeleteCompletedCount_.load();
     metrics.lastScheduleMutationErrorCode = static_cast<BridgeError>(lastScheduleMutationErrorCode_.load());
@@ -339,7 +340,10 @@ void UpdateCoordinator::WriteLoop()
         lastWriteStartDelayMs_ = delay;
         const auto error = gateway_.Write(request.key, request.value);
         lastWriteErrorCode_ = static_cast<int>(error);
-        if (request.key.dataId == 2104) {
+        if (request.key.dataId == 2103) {
+            ++scheduleOrderWriteCompletedCount_;
+            lastScheduleMutationErrorCode_ = static_cast<int>(error);
+        } else if (request.key.dataId == 2104) {
             ++scheduleAddCompletedCount_;
             lastScheduleMutationErrorCode_ = static_cast<int>(error);
         } else if (request.key.dataId == 2105) {

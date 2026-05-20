@@ -1,0 +1,57 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.0.35717.1
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CoreTests", "tests\CoreTests\CoreTests.vcxproj", "{A3333333-3333-3333-3333-333333333333}"
+	ProjectSection(ProjectDependencies) = postProject
+		{A1111111-1111-1111-1111-111111111111} = {A1111111-1111-1111-1111-111111111111}
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "MFCApplication7Core", "src\Core\MFCApplication7Core.vcxproj", "{A1111111-1111-1111-1111-111111111111}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "MFCApplication7", "src\App\MFCApplication7.vcxproj", "{A2222222-2222-2222-2222-222222222222}"
+	ProjectSection(ProjectDependencies) = postProject
+		{A1111111-1111-1111-1111-111111111111} = {A1111111-1111-1111-1111-111111111111}
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "BackendBridgeMock", "src\BackendBridgeMock\BackendBridgeMock.vcxproj", "{A4444444-4444-4444-4444-444444444444}"
+	ProjectSection(ProjectDependencies) = postProject
+		{A1111111-1111-1111-1111-111111111111} = {A1111111-1111-1111-1111-111111111111}
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "PerformanceTest", "tests\PerformanceTest\PerformanceTest.vcxproj", "{A5555555-5555-5555-5555-555555555555}"
+	ProjectSection(ProjectDependencies) = postProject
+		{A1111111-1111-1111-1111-111111111111} = {A1111111-1111-1111-1111-111111111111}
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A3333333-3333-3333-3333-333333333333}.Debug|x64.ActiveCfg = Debug|x64
+		{A3333333-3333-3333-3333-333333333333}.Debug|x64.Build.0 = Debug|x64
+		{A3333333-3333-3333-3333-333333333333}.Release|x64.ActiveCfg = Release|x64
+		{A3333333-3333-3333-3333-333333333333}.Release|x64.Build.0 = Release|x64
+		{A1111111-1111-1111-1111-111111111111}.Debug|x64.ActiveCfg = Debug|x64
+		{A1111111-1111-1111-1111-111111111111}.Debug|x64.Build.0 = Debug|x64
+		{A1111111-1111-1111-1111-111111111111}.Release|x64.ActiveCfg = Release|x64
+		{A1111111-1111-1111-1111-111111111111}.Release|x64.Build.0 = Release|x64
+		{A2222222-2222-2222-2222-222222222222}.Debug|x64.ActiveCfg = Debug|x64
+		{A2222222-2222-2222-2222-222222222222}.Debug|x64.Build.0 = Debug|x64
+		{A2222222-2222-2222-2222-222222222222}.Release|x64.ActiveCfg = Release|x64
+		{A2222222-2222-2222-2222-222222222222}.Release|x64.Build.0 = Release|x64
+		{A4444444-4444-4444-4444-444444444444}.Debug|x64.ActiveCfg = Debug|x64
+		{A4444444-4444-4444-4444-444444444444}.Debug|x64.Build.0 = Debug|x64
+		{A4444444-4444-4444-4444-444444444444}.Release|x64.ActiveCfg = Release|x64
+		{A4444444-4444-4444-4444-444444444444}.Release|x64.Build.0 = Release|x64
+		{A5555555-5555-5555-5555-555555555555}.Debug|x64.ActiveCfg = Debug|x64
+		{A5555555-5555-5555-5555-555555555555}.Debug|x64.Build.0 = Debug|x64
+		{A5555555-5555-5555-5555-555555555555}.Release|x64.ActiveCfg = Release|x64
+		{A5555555-5555-5555-5555-555555555555}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

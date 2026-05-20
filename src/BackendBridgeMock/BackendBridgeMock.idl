@@ -1,0 +1,34 @@
+import "oaidl.idl";
+import "ocidl.idl";
+
+[
+    uuid(7A8D03F4-C99D-4D8A-9C25-43FC52F9A1B7),
+    version(1.0)
+]
+library BackendBridgeMockLib
+{
+    importlib("stdole2.tlb");
+
+    [
+        object,
+        uuid(260B8AF6-FD4C-4060-A407-77D52EF54D30),
+        dual,
+        nonextensible,
+        pointer_default(unique)
+    ]
+    interface IBackendBridge : IDispatch
+    {
+        [id(1)] HRESULT Connect([in] BSTR ipAddress, [out, retval] LONG* errorCode);
+        [id(2)] HRESULT Read([in] LONG dataId, [in] LONG subId1, [in] LONG subId2, [in] LONG style, [out] BSTR* value, [out, retval] LONG* errorCode);
+        [id(3)] HRESULT Write([in] LONG dataId, [in] LONG subId1, [in] LONG subId2, [in] LONG style, [in] BSTR value, [out, retval] LONG* errorCode);
+    };
+
+    [
+        uuid(A737D261-91BC-4646-B58E-9E8B53378D6F),
+        progid("MFCApplication7.BackendBridgeMock")
+    ]
+    coclass BackendBridge
+    {
+        [default] interface IBackendBridge;
+    };
+};

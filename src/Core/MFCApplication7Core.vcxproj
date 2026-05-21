@@ -78,6 +78,7 @@
     <ClInclude Include="GridModel.h" />
     <ClInclude Include="MockBackendBridge.h" />
     <ClInclude Include="ScreenModels.h" />
+    <ClInclude Include="StatusSummary.h" />
     <ClInclude Include="UpdateScheduler.h" />
   </ItemGroup>
   <ItemGroup>
@@ -90,6 +91,7 @@
     <ClCompile Include="GridModel.cpp" />
     <ClCompile Include="MockBackendBridge.cpp" />
     <ClCompile Include="ScreenModels.cpp" />
+    <ClCompile Include="StatusSummary.cpp" />
     <ClCompile Include="UpdateScheduler.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

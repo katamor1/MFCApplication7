@@ -6,11 +6,12 @@
 
 | 領域 | コントロール | 現行役割 |
 |---|---|---|
-| 上部 | `statusText_` | 画面名、重要更新回数、期限超過、通常更新回数、Write 結果、履歴状態などを表示する。 |
+| 上部 | `statusText_` | 日時、ユーザー名、画面名、業務状態、重要情報状態、更新回数、Write 結果、履歴状態などを表示する。 |
 | 上部右 | `historyProgress_` | 履歴取得進捗を 0-100 で表示する。 |
 | 左端 | `navButtons_` | 5画面を切り替える。 |
 | 左端下 | `expandButton_` | ナビの1列/2列配置を切り替える。 |
-| 中央 | `contentList_` | 現在画面のグリッドを `CListCtrl` として表示する。 |
+| 中央 | `contentList_` | Station 以外の現在画面のグリッドを `CListCtrl` として表示する。 |
+| 中央 | `stationLayout_` | Station 画面だけ表示される固定5列x20行のコンテナ配置図。 |
 | 右側 | `detailText_` | ステーション画面だけ表示される選択コンテナ詳細欄。 |
 | 下部 | `functionButtons_` | F1-F8 相当の操作ボタン。 |
 
@@ -22,7 +23,7 @@
 
 | 画面 | ナビ表示 | 現行表示内容 |
 |---|---|---|
-| `Station` | `ST` | コンテナ一覧グリッドと右側の選択コンテナ詳細テキスト。 |
+| `Station` | `ST` | 固定5列x20行のコンテナ配置図と右側の選択コンテナ詳細テキスト。 |
 | `ContainerList` | `LIST` | コンテナ一覧グリッド。 |
 | `Schedule` | `SCH` | コンテナ、品目名、出庫終了予定、順序のスケジュールグリッド。 |
 | `System` | `SYS` | 履歴状態行と取得済み履歴レコード一覧。 |
@@ -36,17 +37,12 @@
 
 ## ステータス表示
 
-`RefreshStatus()` は次の情報を1行文字列として組み立てます。
+`RefreshStatus()` は Core の `BuildStatusSummary()` で2行の共通ステータス文字列を組み立て、`statusText_` へ表示します。
 
-- 現在画面名。
-- critical 更新回数。
-- critical 期限超過回数。
-- normal 更新回数。
-- 最終 Write 開始遅延、Write 完了数、最終 Write 結果。
-- 履歴状態、履歴進捗、履歴 Read 件数、履歴エラー件数。
-- 先頭 critical value がエラーの場合、そのエラー表示。
+- 1行目: ローカル日時、Windowsログオンユーザー名、現在画面名、業務状態、重要情報状態。
+- 2行目: critical 更新回数、critical 期限超過回数、normal 更新回数、Write/予定Write/履歴メトリクス。
 
-日時、時刻、ユーザー名、業務ステータスの意味づけ表示は現行未実装です。
+業務状態はV1では `dataId=1000` の正常値を表示します。`dataId=1000` が未取得、空文字、エラー、stale の場合は `状態不明` と表示します。重要情報状態は `catalog.CriticalKeys()` と `UpdateSnapshot::criticalValues` を同じ順序で対応付け、エラー、stale、未取得を重要異常として数えます。正式な業務状態ID、警報種別、色/点滅/音などの異常表現は未実装です。
 
 ## F1-F8 ファンクションバー
 
@@ -81,7 +77,11 @@
 
 ### ステーション画面
 
-`PopulateStation()` は `BuildContainerListGrid(snapshot)` を中央グリッドへ表示し、右側に選択コンテナの詳細テキストを表示します。
+`PopulateStation()` は `BuildStationLayoutModel(snapshot, selectedContainerNo_)` を `CStationLayoutCtrl` へ反映し、右側に選択コンテナの詳細テキストを表示します。Station 画面では `contentList_` は非表示で、ContainerList 画面では従来どおり `contentList_` を使います。
+
+配置図V1は正式な配置データIDを使わず、コンテナ番号 1-100 を番号昇順で5列x20行へ固定配置します。`column=(containerNo-1)/20`、`row=(containerNo-1)%20` で、列0から順に左半円、直線、下半円、直線、右半円のガイド種別を表示します。
+
+`CStationLayoutCtrl` は列ガイド、コンテナセル、コンテナ番号、状態短縮文字を `CPaintDC` で描画します。セル色はV1固定で、通常は白、選択は薄青、コンテナなしは薄灰、異常検知は薄赤、満載は薄黄、追加可能は薄緑です。セルクリックで `selectedContainerNo_` と `UpdateCoordinator::SetSelectedContainer()` を更新し、選択セルを再描画します。コンテナなしセルも選択できますが、F1詳細は無効になります。
 
 右側詳細には次を表示します。
 
@@ -90,7 +90,7 @@
 - 状態。
 - 最大5品目の品目名、入庫日、出庫開始、順序、作業時間。
 
-現行では物理配置を模した半円/直線レイアウトや専用コンテナコントロールは未実装です。
+正式な物理座標、バックエンドから取得する配置タイプ、半円/直線の実設備再現、スクロール/ズーム、色以外のアラーム表現は未実装です。
 
 ### コンテナ一覧画面
 

@@ -4,6 +4,7 @@
 #include "GridModel.h"
 #include "MockBackendBridge.h"
 #include "ScreenModels.h"
+#include "StatusSummary.h"
 #include "UpdateScheduler.h"
 #include "BridgeFactory.h"
 
@@ -662,6 +663,143 @@ void TestScreenSnapshotBuildsContainerSummary()
     Check(!station.selected.items.empty(), "selected container should expose items");
 }
 
+/**
+ * @brief Verify fixed station layout maps 100 containers into 5x20 cells.
+ */
+void TestStationLayoutModelUsesFixedFiveColumnPlacement()
+{
+    StationSnapshot snapshot;
+    snapshot.containers.reserve(100);
+    for (int containerNo = 1; containerNo <= 100; ++containerNo) {
+        ContainerSummary container;
+        container.containerNo = containerNo;
+        container.containerName = L"CNT-" + std::to_wstring(containerNo);
+        container.state = containerNo == 29 ? L"コンテナなし" : L"空";
+        container.missing = container.state == L"コンテナなし";
+        snapshot.containers.push_back(container);
+    }
+
+    const auto layout = BuildStationLayoutModel(snapshot, 21);
+    Check(layout.columnCount == 5, "station layout should use five columns");
+    Check(layout.rowsPerColumn == 20, "station layout should use twenty rows per column");
+    Check(layout.cells.size() == 100, "station layout should expose 100 cells");
+
+    const auto& first = layout.cells[0];
+    Check(first.containerNo == 1, "container 1 should be first cell");
+    Check(first.column == 0 && first.row == 0, "container 1 should be column 0 row 0");
+    Check(first.kind == StationLayoutKind::LeftSemiCircle, "first column should be left semicircle");
+    Check(first.displayText == L"1", "cell display text should be container number");
+
+    const auto& twentyFirst = layout.cells[20];
+    Check(twentyFirst.containerNo == 21, "container 21 should start the second column");
+    Check(twentyFirst.column == 1 && twentyFirst.row == 0, "container 21 should be column 1 row 0");
+    Check(twentyFirst.kind == StationLayoutKind::Straight, "second column should be straight");
+    Check(twentyFirst.selected, "selected container should be marked");
+
+    const auto& missing = layout.cells[28];
+    Check(missing.containerNo == 29, "container 29 should be present");
+    Check(missing.missing, "container without state should be marked missing");
+    Check(missing.state == L"コンテナなし", "cell should preserve container state");
+
+    const auto& last = layout.cells[99];
+    Check(last.containerNo == 100, "container 100 should be last cell");
+    Check(last.column == 4 && last.row == 19, "container 100 should be column 4 row 19");
+    Check(last.kind == StationLayoutKind::RightSemiCircle, "last column should be right semicircle");
+}
+
+/**
+ * @brief Verify normal critical values build the common status summary.
+ */
+void TestStatusSummaryShowsNormalCriticalState()
+{
+    const auto catalog = DataCatalog::LoadFromFile(L"config/data_catalog.json");
+    UpdateSnapshot snapshot;
+    for (size_t index = 0; index < catalog.CriticalKeys().size(); ++index) {
+        snapshot.criticalValues.push_back({index == 0 ? L"正常" : L"VALUE-" + std::to_wstring(index), BridgeError::Ok, {}, false});
+    }
+
+    SchedulerMetrics metrics;
+    metrics.criticalCycles = 10;
+    metrics.criticalDeadlineMisses = 0;
+    metrics.normalCycles = 2;
+    const StatusContext context{L"システム", L"2026/05/21 07:00:00", L"operator"};
+
+    const auto summary = BuildStatusSummary(catalog, snapshot, metrics, context);
+    Check(summary.businessStateText == L"正常", "status summary should use dataId 1000 as business state");
+    Check(summary.criticalErrorCount == 0, "normal critical values should not count errors");
+    Check(!summary.hasCriticalError, "normal critical values should not set critical error flag");
+    Check(summary.criticalItems.size() == 20, "status summary should expose all critical items");
+    Check(summary.criticalItems[0].name == L"重要情報 1000", "critical item should use catalog name");
+    Check(summary.displayText.find(L"日時: 2026/05/21 07:00:00 / ユーザー: operator / 画面: システム / 業務状態: 正常 / 重要: 正常") != std::wstring::npos,
+          "status summary first line should include context and normal state");
+    Check(summary.displayText.find(L"\r\n重要更新: 10 / 期限超過: 0 / 通常更新: 2") != std::wstring::npos,
+          "status summary second line should include update metrics");
+}
+
+/**
+ * @brief Verify stale, error, and missing critical values are counted and exposed.
+ */
+void TestStatusSummaryCountsCriticalErrorsAndMissingValues()
+{
+    const auto catalog = DataCatalog::LoadFromFile(L"config/data_catalog.json");
+    UpdateSnapshot snapshot;
+    snapshot.criticalValues.push_back({L"", BridgeError::Ok, {}, false});
+    snapshot.criticalValues.push_back({L"", BridgeError::Timeout, {}, true});
+
+    SchedulerMetrics metrics;
+    const StatusContext context{L"保守", L"2026/05/21 07:01:00", L"operator"};
+
+    const auto summary = BuildStatusSummary(catalog, snapshot, metrics, context);
+    Check(summary.businessStateText == L"状態不明", "empty dataId 1000 should make business state unknown");
+    Check(summary.hasCriticalError, "critical errors should set critical error flag");
+    Check(summary.criticalErrorCount == 19, "one explicit error plus eighteen missing values should count as errors");
+    Check(summary.criticalItems.size() == 20, "missing critical values should still create status items");
+    Check(summary.criticalItems[1].name == L"重要情報 1001", "error item should keep catalog name");
+    Check(summary.criticalItems[1].errorCode == BridgeError::Timeout, "error item should preserve backend error");
+    Check(summary.criticalItems[1].stale, "error item should preserve stale state");
+    Check(summary.criticalItems[2].displayText == L"未取得", "missing critical item should show not-yet-read text");
+    Check(summary.criticalItems[2].errorCode == BridgeError::InternalError, "missing critical item should use internal error code");
+    Check(summary.criticalItems[2].stale, "missing critical item should be stale");
+    Check(summary.displayText.find(L"重要: 異常19件") != std::wstring::npos, "status line should include critical error count");
+}
+
+/**
+ * @brief Verify write, schedule-write, and history details are appended to the status summary.
+ */
+void TestStatusSummaryIncludesWriteAndHistoryDetails()
+{
+    const auto catalog = DataCatalog::LoadFromFile(L"config/data_catalog.json");
+    UpdateSnapshot snapshot;
+    for (size_t index = 0; index < catalog.CriticalKeys().size(); ++index) {
+        snapshot.criticalValues.push_back({index == 0 ? L"正常" : L"VALUE-" + std::to_wstring(index), BridgeError::Ok, {}, false});
+    }
+    snapshot.historyStatusText = L"履歴取得中";
+    snapshot.historyProgress = 42;
+
+    SchedulerMetrics metrics;
+    metrics.criticalCycles = 5;
+    metrics.normalCycles = 1;
+    metrics.lastWriteStartDelayMs = 12;
+    metrics.writeCompletedCount = 3;
+    metrics.lastWriteErrorCode = BridgeError::Ok;
+    metrics.scheduleOrderWriteCompletedCount = 2;
+    metrics.scheduleAddCompletedCount = 1;
+    metrics.scheduleDeleteCompletedCount = 1;
+    metrics.lastScheduleMutationErrorCode = BridgeError::Ok;
+    metrics.historyReadCount = 77;
+    metrics.historyErrorCount = 2;
+    metrics.historyLastErrorCode = BridgeError::Timeout;
+    const StatusContext context{L"スケジュール", L"2026/05/21 07:02:00", L"operator"};
+
+    const auto summary = BuildStatusSummary(catalog, snapshot, metrics, context);
+    Check(summary.displayText.find(L"最終Write開始遅延: 12ms / Write完了: 3 / 最終Write結果: OK") != std::wstring::npos,
+          "status summary should include write metrics");
+    Check(summary.displayText.find(L"予定順序: 2 / 予定追加: 1 / 予定削除: 1 / 予定Write結果: OK") != std::wstring::npos,
+          "status summary should include schedule write metrics");
+    Check(summary.displayText.find(L"履歴: 履歴取得中 42% / 履歴Read: 77 / 履歴エラー: 2(タイムアウト)") != std::wstring::npos,
+          "status summary should include history metrics and error code");
+}
+
 } // namespace
 
 /**
@@ -700,6 +838,10 @@ int wmain()
         TestHistoryLoadKeepsWritePriorityResponsive,
         TestPriorityQueueOrdersCriticalBeforeNormalAndHistory,
         TestScreenSnapshotBuildsContainerSummary,
+        TestStationLayoutModelUsesFixedFiveColumnPlacement,
+        TestStatusSummaryShowsNormalCriticalState,
+        TestStatusSummaryCountsCriticalErrorsAndMissingValues,
+        TestStatusSummaryIncludesWriteAndHistoryDetails,
     };
 
     try {

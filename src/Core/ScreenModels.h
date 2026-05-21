@@ -52,6 +52,42 @@ struct StationSnapshot
 };
 
 /**
+ * @brief ステーション配置図の固定配置種別。
+ */
+enum class StationLayoutKind
+{
+    LeftSemiCircle,
+    Straight,
+    BottomSemiCircle,
+    RightSemiCircle,
+};
+
+/**
+ * @brief ステーション配置図の1セル。
+ */
+struct StationLayoutCell
+{
+    int containerNo{};
+    int column{};
+    int row{};
+    StationLayoutKind kind{StationLayoutKind::Straight};
+    std::wstring displayText;
+    std::wstring state;
+    bool missing{false};
+    bool selected{false};
+};
+
+/**
+ * @brief ステーション配置図の表示モデル。
+ */
+struct StationLayoutModel
+{
+    int columnCount{};
+    int rowsPerColumn{};
+    std::vector<StationLayoutCell> cells;
+};
+
+/**
  * @brief スケジュール順序入れ替えで発行するWrite要求。
  */
 struct ScheduleOrderWrite
@@ -68,6 +104,10 @@ ContainerSummary BuildContainerSummary(const DataGateway& gateway, int container
  * @brief ステーション画面用のコンテナ一覧スナップショットを生成する。
  */
 StationSnapshot BuildStationSnapshot(const DataGateway& gateway, int selectedContainerNo);
+/**
+ * @brief ステーション画面用の固定配置モデルを生成する。
+ */
+StationLayoutModel BuildStationLayoutModel(const StationSnapshot& snapshot, int selectedContainerNo);
 /**
  * @brief コンテナ一覧画面向けのグリッドデータを構築する。
  */

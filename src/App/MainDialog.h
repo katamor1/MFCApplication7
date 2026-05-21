@@ -4,6 +4,7 @@
 #include "DataGateway.h"
 #include "FunctionBarModel.h"
 #include "CustomGridCtrl.h"
+#include "StationLayoutCtrl.h"
 #include "BridgeFactory.h"
 #include "ScreenModels.h"
 #include "UpdateScheduler.h"
@@ -81,6 +82,10 @@ protected:
      * @brief 一覧選択変更時に selectedContainerNo_ を更新する。
      */
     afx_msg void OnListItemChanged(NMHDR* notify, LRESULT* result);
+    /**
+     * @brief ステーション配置図クリック時に selectedContainerNo_ を更新する。
+     */
+    afx_msg void OnStationLayoutClicked();
 
     DECLARE_MESSAGE_MAP()
 
@@ -163,6 +168,7 @@ private:
     CProgressCtrl historyProgress_;
     CStatic detailText_;
     CCustomGridCtrl contentList_;
+    CStationLayoutCtrl stationLayout_;
     CButton expandButton_;
     std::array<CButton, 5> navButtons_;
     std::array<CButton, 8> functionButtons_;

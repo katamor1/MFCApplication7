@@ -4,6 +4,7 @@
 #include "OrderEditDialog.h"
 #include "ScheduleAddDialog.h"
 #include "ScheduleDeleteConfirmDialog.h"
+#include "StatusSummary.h"
 
 #include <algorithm>
 #include <sstream>
@@ -44,6 +45,43 @@ CString ToCString(const std::wstring& value)
     return CString(value.c_str());
 }
 
+bool IsSelectedContainerMissing(const StationSnapshot& station, int selectedContainerNo)
+{
+    const auto found = std::find_if(station.containers.begin(), station.containers.end(), [selectedContainerNo](const ContainerSummary& container) {
+        return container.containerNo == selectedContainerNo;
+    });
+    if (found == station.containers.end()) {
+        return true;
+    }
+    return found->missing;
+}
+
+std::wstring CurrentDateTimeText()
+{
+    SYSTEMTIME now{};
+    GetLocalTime(&now);
+    wchar_t buffer[20]{};
+    swprintf_s(buffer,
+               L"%04u/%02u/%02u %02u:%02u:%02u",
+               now.wYear,
+               now.wMonth,
+               now.wDay,
+               now.wHour,
+               now.wMinute,
+               now.wSecond);
+    return buffer;
+}
+
+std::wstring CurrentUserName()
+{
+    wchar_t buffer[256]{};
+    DWORD size = static_cast<DWORD>(std::size(buffer));
+    if (GetUserNameW(buffer, &size) == FALSE || size == 0) {
+        return L"unknown";
+    }
+    return buffer;
+}
+
 } // namespace
 
 BEGIN_MESSAGE_MAP(CMainDialog, CDialogEx)
@@ -53,6 +91,7 @@ BEGIN_MESSAGE_MAP(CMainDialog, CDialogEx)
     ON_COMMAND_RANGE(IDC_FUNCTION_BASE, IDC_FUNCTION_BASE + 7, &CMainDialog::OnFunctionCommand)
     ON_BN_CLICKED(IDC_NAV_EXPAND, &CMainDialog::OnNavExpand)
     ON_NOTIFY(LVN_ITEMCHANGED, IDC_CONTENT_LIST, &CMainDialog::OnListItemChanged)
+    ON_BN_CLICKED(IDC_STATION_LAYOUT, &CMainDialog::OnStationLayoutClicked)
 END_MESSAGE_MAP()
 
 /**
@@ -241,6 +280,18 @@ void CMainDialog::OnListItemChanged(NMHDR* notify, LRESULT* result)
 }
 
 /**
+ * @brief Update selected station container from layout click notification.
+ */
+void CMainDialog::OnStationLayoutClicked()
+{
+    selectedContainerNo_ = stationLayout_.SelectedContainerNo();
+    if (coordinator_) {
+        coordinator_->SetSelectedContainer(selectedContainerNo_);
+    }
+    RefreshUi(true);
+}
+
+/**
  * @brief Create all UI controls and default labels for each screen group.
  */
 void CMainDialog::CreateControls()
@@ -250,6 +301,7 @@ void CMainDialog::CreateControls()
     detailText_.Create(L"", WS_CHILD | WS_VISIBLE | SS_LEFT | WS_BORDER, CRect(0, 0, 0, 0), this, IDC_DETAIL_TEXT);
     contentList_.Create(WS_CHILD | WS_VISIBLE | WS_BORDER | LVS_REPORT | LVS_SINGLESEL, CRect(0, 0, 0, 0), this, IDC_CONTENT_LIST);
     contentList_.SetExtendedStyle(LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
+    stationLayout_.Create(WS_CHILD | WS_BORDER, CRect(0, 0, 0, 0), this, IDC_STATION_LAYOUT);
 
     const std::array<const wchar_t*, 5> labels = {L"ST", L"LIST", L"SCH", L"SYS", L"MNT"};
     for (size_t i = 0; i < navButtons_.size(); ++i) {
@@ -294,9 +346,19 @@ void CMainDialog::LayoutControls()
     const int contentLeft = navWidth + gap;
     const int contentTop = topHeight + gap;
     const int detailWidth = currentScreen_ == MainScreenId::Station ? client.Width() / 3 : 0;
-    contentList_.MoveWindow(contentLeft, contentTop, client.Width() - contentLeft - detailWidth - gap, client.Height() - topHeight - bottomHeight - gap * 2);
+    const int contentWidth = std::max(1, client.Width() - contentLeft - detailWidth - gap);
+    const int contentHeight = std::max(1, client.Height() - topHeight - bottomHeight - gap * 2);
+    if (currentScreen_ == MainScreenId::Station) {
+        contentList_.ShowWindow(SW_HIDE);
+        stationLayout_.ShowWindow(SW_SHOW);
+        stationLayout_.MoveWindow(contentLeft, contentTop, contentWidth, contentHeight);
+    } else {
+        stationLayout_.ShowWindow(SW_HIDE);
+        contentList_.ShowWindow(SW_SHOW);
+        contentList_.MoveWindow(contentLeft, contentTop, contentWidth, contentHeight);
+    }
     detailText_.ShowWindow(currentScreen_ == MainScreenId::Station ? SW_SHOW : SW_HIDE);
-    detailText_.MoveWindow(client.Width() - detailWidth, contentTop, detailWidth - gap, client.Height() - topHeight - bottomHeight - gap * 2);
+    detailText_.MoveWindow(client.Width() - detailWidth, contentTop, std::max(1, detailWidth - gap), contentHeight);
 
     const int functionWidth = (client.Width() - gap * 9) / 8;
     const int functionTop = client.Height() - bottomHeight + gap;
@@ -348,34 +410,13 @@ void CMainDialog::RefreshUi(bool forceGrid)
 void CMainDialog::RefreshStatus(const UpdateSnapshot& snapshot)
 {
     const auto metrics = coordinator_->Metrics();
-    std::wostringstream text;
-    text << L"画面: " << ScreenTitle().GetString()
-         << L" / 重要更新: " << metrics.criticalCycles
-         << L" / 期限超過: " << metrics.criticalDeadlineMisses
-         << L" / 通常更新: " << metrics.normalCycles;
-    if (metrics.lastWriteStartDelayMs >= 0) {
-        text << L" / 最終Write開始遅延: " << metrics.lastWriteStartDelayMs << L"ms";
-        text << L" / Write完了: " << metrics.writeCompletedCount;
-        text << L" / 最終Write結果: " << ToDisplayText(metrics.lastWriteErrorCode);
-        if (metrics.scheduleAddCompletedCount > 0 || metrics.scheduleDeleteCompletedCount > 0) {
-            text << L" / 予定追加: " << metrics.scheduleAddCompletedCount
-                 << L" / 予定削除: " << metrics.scheduleDeleteCompletedCount
-                 << L" / 予定Write結果: " << ToDisplayText(metrics.lastScheduleMutationErrorCode);
-        }
-    }
-    if (!snapshot.historyStatusText.empty()) {
-        text << L" / 履歴: " << snapshot.historyStatusText;
-        text << L" " << snapshot.historyProgress << L"%";
-        text << L" / 履歴Read: " << metrics.historyReadCount;
-        if (metrics.historyErrorCount > 0) {
-            text << L" / 履歴エラー: " << metrics.historyErrorCount
-                 << L"(" << ToDisplayText(metrics.historyLastErrorCode) << L")";
-        }
-    }
-    if (!snapshot.criticalValues.empty() && snapshot.criticalValues.front().errorCode != BridgeError::Ok) {
-        text << L" / " << ToDisplayText(snapshot.criticalValues.front().errorCode);
-    }
-    statusText_.SetWindowText(ToCString(text.str()));
+    const StatusContext context{
+        std::wstring(ScreenTitle().GetString()),
+        CurrentDateTimeText(),
+        CurrentUserName(),
+    };
+    const auto summary = BuildStatusSummary(catalog_, snapshot, metrics, context);
+    statusText_.SetWindowText(ToCString(summary.displayText));
     historyProgress_.SetPos(snapshot.historyProgress);
 }
 
@@ -386,7 +427,10 @@ void CMainDialog::RefreshFunctions(const UpdateSnapshot& snapshot)
 {
     std::vector<FunctionAction> actions;
     if (currentScreen_ == MainScreenId::Station || currentScreen_ == MainScreenId::ContainerList) {
-        actions = BuildContainerFunctionActions(true, snapshot.station.selected.missing);
+        const bool missing = currentScreen_ == MainScreenId::Station
+                                 ? IsSelectedContainerMissing(snapshot.station, selectedContainerNo_)
+                                 : snapshot.station.selected.missing;
+        actions = BuildContainerFunctionActions(true, missing);
     } else if (currentScreen_ == MainScreenId::Schedule) {
         const bool hasSelection = contentList_.GetFirstSelectedItemPosition() != nullptr;
         actions = BuildScheduleFunctionActions(hasSelection, hasSelection && CanMoveScheduleSelectionUp());
@@ -471,13 +515,23 @@ void CMainDialog::PopulateGrid(const GridModel& grid)
  */
 void CMainDialog::PopulateStation(const StationSnapshot& snapshot)
 {
-    PopulateGrid(BuildContainerListGrid(snapshot));
+    stationLayout_.ApplyModel(BuildStationLayoutModel(snapshot, selectedContainerNo_));
+
+    const ContainerSummary* selected = &snapshot.selected;
+    const auto found = std::find_if(snapshot.containers.begin(), snapshot.containers.end(), [this](const ContainerSummary& container) {
+        return container.containerNo == selectedContainerNo_;
+    });
+    ContainerSummary summaryOnly;
+    if (snapshot.selected.containerNo != selectedContainerNo_ && found != snapshot.containers.end()) {
+        summaryOnly = *found;
+        selected = &summaryOnly;
+    }
 
     std::wostringstream detail;
-    detail << L"選択コンテナ: " << snapshot.selected.containerNo << L"\r\n"
-           << L"名称: " << snapshot.selected.containerName << L"\r\n"
-           << L"状態: " << snapshot.selected.state << L"\r\n\r\n";
-    for (const auto& item : snapshot.selected.items) {
+    detail << L"選択コンテナ: " << selected->containerNo << L"\r\n"
+           << L"名称: " << selected->containerName << L"\r\n"
+           << L"状態: " << selected->state << L"\r\n\r\n";
+    for (const auto& item : selected->items) {
         detail << item.itemName << L" / 入庫 " << item.inboundDate << L" / 出庫 " << item.outboundStart
                << L" / 順序 " << item.outboundOrder << L" / 作業 " << item.workTime << L"\r\n";
     }

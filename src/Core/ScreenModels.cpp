@@ -53,6 +53,20 @@ struct ScheduleGridEntry
     bool validOrder{false};
 };
 
+StationLayoutKind LayoutKindForColumn(int column) noexcept
+{
+    switch (column) {
+    case 0:
+        return StationLayoutKind::LeftSemiCircle;
+    case 2:
+        return StationLayoutKind::BottomSemiCircle;
+    case 4:
+        return StationLayoutKind::RightSemiCircle;
+    default:
+        return StationLayoutKind::Straight;
+    }
+}
+
 } // namespace
 
 /**
@@ -95,6 +109,45 @@ StationSnapshot BuildStationSnapshot(const DataGateway& gateway, int selectedCon
     }
     snapshot.selected = BuildContainerSummary(gateway, std::max(1, std::min(100, selectedContainerNo)), 5);
     return snapshot;
+}
+
+/**
+ * @brief Build fixed 5-column by 20-row station layout from station snapshot.
+ */
+StationLayoutModel BuildStationLayoutModel(const StationSnapshot& snapshot, int selectedContainerNo)
+{
+    constexpr int kColumnCount = 5;
+    constexpr int kRowsPerColumn = 20;
+
+    StationLayoutModel layout;
+    layout.columnCount = kColumnCount;
+    layout.rowsPerColumn = kRowsPerColumn;
+    layout.cells.reserve(static_cast<size_t>(kColumnCount * kRowsPerColumn));
+
+    for (int index = 0; index < kColumnCount * kRowsPerColumn; ++index) {
+        const int containerNo = index + 1;
+        const int column = index / kRowsPerColumn;
+        const int row = index % kRowsPerColumn;
+        StationLayoutCell cell;
+        cell.containerNo = containerNo;
+        cell.column = column;
+        cell.row = row;
+        cell.kind = LayoutKindForColumn(column);
+        cell.displayText = std::to_wstring(containerNo);
+        cell.selected = containerNo == selectedContainerNo;
+
+        const auto found = std::find_if(snapshot.containers.begin(), snapshot.containers.end(), [containerNo](const ContainerSummary& container) {
+            return container.containerNo == containerNo;
+        });
+        if (found != snapshot.containers.end()) {
+            cell.state = found->state;
+            cell.missing = found->missing;
+        }
+
+        layout.cells.push_back(std::move(cell));
+    }
+
+    return layout;
 }
 
 /**

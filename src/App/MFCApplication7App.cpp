@@ -4,10 +4,12 @@
 #include "DataGateway.h"
 #include "MainDialog.h"
 #include "ScreenModels.h"
+#include "StatusSummary.h"
 #include "UpdateScheduler.h"
 
 #include <afxcmn.h>
 
+#include <algorithm>
 #include <chrono>
 #include <thread>
 
@@ -38,6 +40,20 @@ bool WaitForWriteCount(const UpdateCoordinator& coordinator, int expectedCount)
 {
     for (int attempt = 0; attempt < 100; ++attempt) {
         if (coordinator.Metrics().writeCompletedCount >= expectedCount) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
+}
+
+/**
+ * @brief Poll until critical snapshot values are available.
+ */
+bool WaitForCriticalValues(const UpdateCoordinator& coordinator, size_t expectedCount)
+{
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        if (coordinator.Snapshot().criticalValues.size() >= expectedCount) {
             return true;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -238,6 +254,106 @@ int RunScheduleMutationSmoke(const BridgeFactoryOptions& options)
 }
 
 /**
+ * @brief Run common status summary smoke test.
+ */
+int RunStatusSmoke(const BridgeFactoryOptions& options)
+{
+    const auto catalog = LoadConfiguredCatalogOrDefault(options.catalogPath);
+    auto bridge = CreateBackendBridge(options);
+    DataGateway gateway(bridge);
+    if (gateway.Connect(options.ipAddress) != BridgeError::Ok) {
+        return 400;
+    }
+
+    UpdateCoordinator coordinator(catalog, gateway);
+    coordinator.Start();
+    if (!WaitForCriticalValues(coordinator, catalog.CriticalKeys().size())) {
+        coordinator.Stop();
+        return 410;
+    }
+    coordinator.RequestWrite({2103, 1, 1, DataStyle::Raw}, L"3141");
+    if (!WaitForWriteCount(coordinator, 1)) {
+        coordinator.Stop();
+        return 420;
+    }
+    if (!coordinator.StartHistoryLoad({1})) {
+        coordinator.Stop();
+        return 430;
+    }
+    if (!WaitForHistoryProgress(coordinator)) {
+        coordinator.Stop();
+        return 440;
+    }
+
+    const auto snapshot = coordinator.Snapshot();
+    const auto metrics = coordinator.Metrics();
+    coordinator.CancelHistoryLoad();
+    WaitForHistoryStop(coordinator);
+    coordinator.Stop();
+
+    const auto summary = BuildStatusSummary(catalog,
+                                            snapshot,
+                                            metrics,
+                                            {L"自己診断", L"2026/05/21 07:03:00", L"selftest"});
+    if (summary.displayText.find(L"日時: 2026/05/21 07:03:00") == std::wstring::npos ||
+        summary.displayText.find(L"ユーザー: selftest") == std::wstring::npos ||
+        summary.displayText.find(L"画面: 自己診断") == std::wstring::npos ||
+        summary.displayText.find(L"業務状態: 正常") == std::wstring::npos ||
+        summary.displayText.find(L"重要: 正常") == std::wstring::npos ||
+        summary.displayText.find(L"最終Write結果: OK") == std::wstring::npos ||
+        summary.displayText.find(L"履歴: ") == std::wstring::npos) {
+        return 450;
+    }
+    if (summary.criticalItems.size() != catalog.CriticalKeys().size()) {
+        return 460;
+    }
+    return 0;
+}
+
+/**
+ * @brief Run fixed station-layout model smoke test.
+ */
+int RunStationLayoutSmoke(const BridgeFactoryOptions& options)
+{
+    auto bridge = CreateBackendBridge(options);
+    DataGateway gateway(bridge);
+    if (gateway.Connect(options.ipAddress) != BridgeError::Ok) {
+        return 500;
+    }
+
+    const auto station = BuildStationSnapshot(gateway, 29);
+    const auto layout = BuildStationLayoutModel(station, 29);
+    if (layout.columnCount != 5 || layout.rowsPerColumn != 20 || layout.cells.size() != 100) {
+        return 510;
+    }
+    if (layout.cells[0].containerNo != 1 ||
+        layout.cells[0].column != 0 ||
+        layout.cells[0].row != 0 ||
+        layout.cells[0].kind != StationLayoutKind::LeftSemiCircle) {
+        return 520;
+    }
+    if (layout.cells[20].containerNo != 21 ||
+        layout.cells[20].column != 1 ||
+        layout.cells[20].row != 0 ||
+        layout.cells[20].kind != StationLayoutKind::Straight) {
+        return 530;
+    }
+    if (layout.cells[99].containerNo != 100 ||
+        layout.cells[99].column != 4 ||
+        layout.cells[99].row != 19 ||
+        layout.cells[99].kind != StationLayoutKind::RightSemiCircle) {
+        return 540;
+    }
+    const auto selectedCount = std::count_if(layout.cells.begin(), layout.cells.end(), [](const StationLayoutCell& cell) {
+        return cell.selected;
+    });
+    if (selectedCount != 1 || !layout.cells[28].selected || !layout.cells[28].missing || !station.selected.missing) {
+        return 550;
+    }
+    return 0;
+}
+
+/**
  * @brief Run schedule order sort and move-up write smoke test.
  */
 int RunScheduleOrderSmoke(const BridgeFactoryOptions& options)
@@ -302,7 +418,13 @@ int RunScheduleOrderSmoke(const BridgeFactoryOptions& options)
 /**
  * @brief Run core behavior checks and optional smoke subtests.
  */
-int RunSelfTest(const BridgeFactoryOptions& options, bool writeSmoke, bool historySmoke, bool scheduleMutationSmoke, bool scheduleOrderSmoke)
+int RunSelfTest(const BridgeFactoryOptions& options,
+                bool writeSmoke,
+                bool historySmoke,
+                bool scheduleMutationSmoke,
+                bool scheduleOrderSmoke,
+                bool statusSmoke,
+                bool stationLayoutSmoke)
 {
     auto bridge = CreateBackendBridge(options);
     DataGateway gateway(bridge);
@@ -325,6 +447,12 @@ int RunSelfTest(const BridgeFactoryOptions& options, bool writeSmoke, bool histo
     }
     if (historySmoke) {
         return RunHistorySmoke(options);
+    }
+    if (statusSmoke) {
+        return RunStatusSmoke(options);
+    }
+    if (stationLayoutSmoke) {
+        return RunStationLayoutSmoke(options);
     }
     if (scheduleMutationSmoke) {
         return RunScheduleMutationSmoke(options);
@@ -356,7 +484,9 @@ BOOL CMFCApplication7App::InitInstance()
                                                     HasArgument(commandLine, L"/WriteSmoke"),
                                                     HasArgument(commandLine, L"/HistorySmoke"),
                                                     HasArgument(commandLine, L"/ScheduleMutationSmoke"),
-                                                    HasArgument(commandLine, L"/ScheduleOrderSmoke"))));
+                                                    HasArgument(commandLine, L"/ScheduleOrderSmoke"),
+                                                    HasArgument(commandLine, L"/StatusSmoke"),
+                                                    HasArgument(commandLine, L"/StationLayoutSmoke"))));
     }
 
     CMainDialog dialog(bridgeOptions);

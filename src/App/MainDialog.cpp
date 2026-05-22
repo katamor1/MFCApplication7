@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <sstream>
+#include <utility>
 
 /**
  * @file MainDialog.cpp
@@ -19,27 +20,6 @@ namespace {
 
 constexpr UINT_PTR kRefreshTimerId = 1;
 constexpr UINT kRefreshIntervalMs = 33;
-
-/**
- * @brief Resolve current screen title for status output.
- */
-const wchar_t* ScreenName(MainScreenId screen)
-{
-    switch (screen) {
-    case MainScreenId::Station:
-        return L"コンテナステーション";
-    case MainScreenId::ContainerList:
-        return L"コンテナ一覧";
-    case MainScreenId::Schedule:
-        return L"コンテナスケジュール";
-    case MainScreenId::System:
-        return L"システム";
-    case MainScreenId::Maintenance:
-        return L"コンテナ保守";
-    default:
-        return L"";
-    }
-}
 
 CString ToCString(const std::wstring& value)
 {
@@ -83,17 +63,43 @@ std::wstring CurrentUserName()
     return buffer;
 }
 
+bool TryParseScheduleOrderText(const std::wstring& value, int& order)
+{
+    constexpr int kMaxOrder = 9999;
+    if (value.empty()) {
+        return false;
+    }
+
+    int parsed = 0;
+    for (const wchar_t ch : value) {
+        if (ch < L'0' || ch > L'9') {
+            return false;
+        }
+        parsed = (parsed * 10) + (ch - L'0');
+        if (parsed > kMaxOrder) {
+            return false;
+        }
+    }
+
+    if (parsed <= 0) {
+        return false;
+    }
+    order = parsed;
+    return true;
+}
+
 } // namespace
 
 BEGIN_MESSAGE_MAP(CMainDialog, CDialogEx)
     ON_WM_TIMER()
     ON_WM_SIZE()
-    ON_COMMAND_RANGE(IDC_NAV_BASE, IDC_NAV_BASE + 4, &CMainDialog::OnNavCommand)
+    ON_COMMAND_RANGE(IDC_NAV_BASE, IDC_NAV_BASE + 14, &CMainDialog::OnNavCommand)
     ON_COMMAND_RANGE(IDC_FUNCTION_BASE, IDC_FUNCTION_BASE + 7, &CMainDialog::OnFunctionCommand)
     ON_BN_CLICKED(IDC_NAV_EXPAND, &CMainDialog::OnNavExpand)
     ON_NOTIFY(LVN_ITEMCHANGED, IDC_CONTENT_LIST, &CMainDialog::OnListItemChanged)
     ON_BN_CLICKED(IDC_STATION_LAYOUT, &CMainDialog::OnStationLayoutClicked)
     ON_BN_CLICKED(IDC_CONTAINER_LIST_LAYOUT, &CMainDialog::OnContainerListLayoutClicked)
+    ON_MESSAGE(WM_GRID_EDIT_COMMITTED, &CMainDialog::OnGridEditCommitted)
 END_MESSAGE_MAP()
 
 /**
@@ -104,6 +110,7 @@ CMainDialog::CMainDialog(BridgeFactoryOptions options)
     , catalog_(LoadConfiguredCatalogOrDefault(options.catalogPath))
     , bridgeOptions_(std::move(options))
     , bridge_(CreateBackendBridge(bridgeOptions_))
+    , navItems_(BuildDefaultNavigationItems())
     , externalApps_(BuildDefaultExternalAppDefinitions())
     , processLauncher_(std::make_unique<Win32ExternalProcessLauncher>())
 {
@@ -199,7 +206,10 @@ void CMainDialog::OnSize(UINT type, int cx, int cy)
 void CMainDialog::OnNavCommand(UINT id)
 {
     const auto index = static_cast<int>(id - IDC_NAV_BASE);
-    SwitchScreen(static_cast<MainScreenId>(index));
+    if (index < 0 || index >= static_cast<int>(navItems_.size())) {
+        return;
+    }
+    SwitchScreen(navItems_[static_cast<size_t>(index)].screen);
 }
 
 /**
@@ -250,6 +260,14 @@ void CMainDialog::OnFunctionCommand(UINT id)
         }
         if (slot == 5) {
             MoveScheduleItemUp(selectedRow);
+            return;
+        }
+        if (slot == 6) {
+            RenumberScheduleRows();
+            return;
+        }
+        if (slot == 7) {
+            UndoScheduleMutation();
             return;
         }
     }
@@ -325,6 +343,21 @@ void CMainDialog::OnContainerListLayoutClicked()
 }
 
 /**
+ * @brief Route custom-grid edit commits into the current screen command path.
+ */
+LRESULT CMainDialog::OnGridEditCommitted(WPARAM wParam, LPARAM lParam)
+{
+    if (static_cast<UINT>(wParam) != IDC_CONTENT_LIST ||
+        reinterpret_cast<CCustomGridCtrl*>(lParam) != &contentList_ ||
+        currentScreen_ != MainScreenId::Schedule) {
+        return 0;
+    }
+
+    HandleScheduleGridEdit(contentList_.LastEditCommit());
+    return 0;
+}
+
+/**
  * @brief Create all UI controls and default labels for each screen group.
  */
 void CMainDialog::CreateControls()
@@ -337,10 +370,13 @@ void CMainDialog::CreateControls()
     contentList_.SetEditingEnabled(false);
     containerListLayout_.Create(WS_CHILD | WS_BORDER, CRect(0, 0, 0, 0), this, IDC_CONTAINER_LIST_LAYOUT);
     stationLayout_.Create(WS_CHILD | WS_BORDER, CRect(0, 0, 0, 0), this, IDC_STATION_LAYOUT);
+    navOverlay_.Create(L"", WS_CHILD | SS_WHITERECT | WS_BORDER, CRect(0, 0, 0, 0), this, IDC_NAV_OVERLAY);
 
-    const std::array<const wchar_t*, 5> labels = {L"ST", L"LIST", L"SCH", L"SYS", L"MNT"};
-    for (size_t i = 0; i < navButtons_.size(); ++i) {
-        navButtons_[i].Create(labels[i], WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, CRect(0, 0, 0, 0), this, IDC_NAV_BASE + static_cast<UINT>(i));
+    navButtons_.reserve(navItems_.size());
+    for (size_t i = 0; i < navItems_.size(); ++i) {
+        auto button = std::make_unique<CButton>();
+        button->Create(ToCString(navItems_[i].shortLabel), WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, CRect(0, 0, 0, 0), this, IDC_NAV_BASE + static_cast<UINT>(i));
+        navButtons_.push_back(std::move(button));
     }
 
     expandButton_.Create(L">>", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, CRect(0, 0, 0, 0), this, IDC_NAV_EXPAND);
@@ -361,7 +397,8 @@ void CMainDialog::LayoutControls()
     GetClientRect(&client);
     const int topHeight = 64;
     const int bottomHeight = 64;
-    const int navWidth = navExpanded_ ? 176 : 88;
+    const int collapsedNavWidth = 88;
+    const int expandedNavWidth = 176;
     const int gap = 8;
 
     statusText_.MoveWindow(gap, gap, client.Width() - 240, topHeight - gap * 2);
@@ -371,14 +408,23 @@ void CMainDialog::LayoutControls()
     const int navBottom = client.Height() - bottomHeight - gap;
     const int navButtonHeight = 48;
     const int navButtonWidth = navExpanded_ ? 78 : 64;
+    const auto navCells = BuildNavigationCells(navItems_, currentScreen_, navExpanded_);
+    navOverlay_.ShowWindow(navExpanded_ ? SW_SHOW : SW_HIDE);
+    navOverlay_.MoveWindow(0, topHeight, expandedNavWidth, std::max(1, client.Height() - topHeight - bottomHeight));
     for (size_t i = 0; i < navButtons_.size(); ++i) {
-        const int column = navExpanded_ ? static_cast<int>(i % 2) : 0;
-        const int row = navExpanded_ ? static_cast<int>(i / 2) : static_cast<int>(i);
-        navButtons_[i].MoveWindow(gap + column * (navButtonWidth + gap), navTop + row * (navButtonHeight + gap), navButtonWidth, navButtonHeight);
+        if (i >= navCells.size()) {
+            navButtons_[i]->ShowWindow(SW_HIDE);
+            continue;
+        }
+        const auto& cell = navCells[i];
+        navButtons_[i]->ShowWindow(SW_SHOW);
+        navButtons_[i]->SetWindowText(ToCString(cell.shortLabel));
+        navButtons_[i]->MoveWindow(gap + cell.column * (navButtonWidth + gap), navTop + cell.row * (navButtonHeight + gap), navButtonWidth, navButtonHeight);
     }
+    expandButton_.SetWindowText(navExpanded_ ? L"<<" : L">>");
     expandButton_.MoveWindow(gap, navBottom - navButtonHeight, navButtonWidth, navButtonHeight);
 
-    const int contentLeft = navWidth + gap;
+    const int contentLeft = collapsedNavWidth + gap;
     const int contentTop = topHeight + gap;
     const int detailWidth = currentScreen_ == MainScreenId::Station ? client.Width() / 3 : 0;
     const int contentWidth = std::max(1, client.Width() - contentLeft - detailWidth - gap);
@@ -406,6 +452,14 @@ void CMainDialog::LayoutControls()
     const int functionTop = client.Height() - bottomHeight + gap;
     for (size_t i = 0; i < functionButtons_.size(); ++i) {
         functionButtons_[i].MoveWindow(gap + static_cast<int>(i) * (functionWidth + gap), functionTop, functionWidth, bottomHeight - gap * 2);
+    }
+
+    if (navExpanded_) {
+        navOverlay_.SetWindowPos(&CWnd::wndTop, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        for (const auto& button : navButtons_) {
+            button->SetWindowPos(&CWnd::wndTop, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+        expandButton_.SetWindowPos(&CWnd::wndTop, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 }
 
@@ -435,10 +489,12 @@ void CMainDialog::RefreshUi(bool forceGrid)
     }
     const auto snapshot = coordinator_->Snapshot();
     const auto metrics = coordinator_->Metrics();
+    CompletePendingScheduleMutation(metrics);
     if (metrics.writeCompletedCount != lastSeenWriteCompletedCount_) {
         lastSeenWriteCompletedCount_ = metrics.writeCompletedCount;
         forceGrid = true;
     }
+    contentList_.SetEditingEnabled(currentScreen_ == MainScreenId::Schedule && !HasPendingScheduleMutation());
     RefreshStatus(snapshot);
     RefreshFunctions(snapshot);
     if (forceGrid) {
@@ -458,7 +514,11 @@ void CMainDialog::RefreshStatus(const UpdateSnapshot& snapshot)
         CurrentUserName(),
     };
     const auto summary = BuildStatusSummary(catalog_, snapshot, metrics, context);
-    statusText_.SetWindowText(ToCString(summary.displayText));
+    auto displayText = summary.displayText;
+    if (!scheduleOperationMessage_.empty()) {
+        displayText += L" / 予定操作: " + scheduleOperationMessage_;
+    }
+    statusText_.SetWindowText(ToCString(displayText));
     historyProgress_.SetPos(snapshot.historyProgress);
 }
 
@@ -473,7 +533,13 @@ void CMainDialog::RefreshFunctions(const UpdateSnapshot& snapshot)
         actions = BuildContainerFunctionActions(true, missing);
     } else if (currentScreen_ == MainScreenId::Schedule) {
         const bool hasSelection = contentList_.GetFirstSelectedItemPosition() != nullptr;
-        actions = BuildScheduleFunctionActions(hasSelection, hasSelection && CanMoveScheduleSelectionUp());
+        const bool hasRows = contentList_.Model().RowCount() > 0;
+        const bool pending = HasPendingScheduleMutation();
+        actions = BuildScheduleFunctionActions(hasSelection,
+                                               hasSelection && CanMoveScheduleSelectionUp(),
+                                               hasRows,
+                                               scheduleUndoStack_.CanUndo(),
+                                               pending);
     } else if (currentScreen_ == MainScreenId::System) {
         actions = BuildSystemFunctionActions(snapshot.historyRunning, !SelectedExternalAppId().empty());
     } else if (currentScreen_ == MainScreenId::Maintenance) {
@@ -512,6 +578,7 @@ void CMainDialog::SwitchScreen(MainScreenId screen)
 void CMainDialog::PopulateCurrentScreen(const UpdateSnapshot& snapshot)
 {
     DataGateway gateway(bridge_);
+    contentList_.SetEditingEnabled(currentScreen_ == MainScreenId::Schedule && !HasPendingScheduleMutation());
     switch (currentScreen_) {
     case MainScreenId::Station:
         PopulateStation(snapshot.station);
@@ -627,21 +694,39 @@ void CMainDialog::ChangeScheduleOrder(int row)
     if (row < 0 || coordinator_ == nullptr) {
         return;
     }
+    if (HasPendingScheduleMutation()) {
+        AfxMessageBox(L"前回の予定操作が完了するまで待ってください。", MB_OK | MB_ICONWARNING);
+        return;
+    }
 
     const auto binding = contentList_.RowBindingAt(row);
     if (binding.containerNo <= 0 || binding.itemNo <= 0) {
         return;
     }
 
-    const std::wstring itemName(contentList_.GetItemText(row, 1).GetString());
-    const std::wstring currentOrder(contentList_.GetItemText(row, 3).GetString());
+    const std::wstring itemName(contentList_.GetItemText(row, ScheduleGridColumn::ItemName).GetString());
+    const std::wstring currentOrder(contentList_.GetItemText(row, ScheduleGridColumn::Order).GetString());
     COrderEditDialog dialog(binding.containerNo, itemName, currentOrder, this);
     if (dialog.DoModal() != IDOK) {
         return;
     }
 
-    coordinator_->RequestWrite({2103, binding.containerNo, binding.itemNo, DataStyle::Raw}, dialog.OrderText());
-    RefreshUi(false);
+    int newOrder = 0;
+    if (!TryParseScheduleOrderText(dialog.OrderText(), newOrder) ||
+        WarnIfDuplicateScheduleOrder(newOrder, binding)) {
+        RefreshUi(true);
+        return;
+    }
+
+    auto writes = BuildScheduleCellEditWrites(binding, ScheduleGridColumn::Order, CellKind::Spin, dialog.OrderText());
+    ScheduleUndoEntry undo{L"順序変更", BuildScheduleCellRestoreWrites(binding, ScheduleGridColumn::Order, currentOrder)};
+    if (undo.writes.empty()) {
+        scheduleOperationMessage_ = L"順序変更をUndo用に記録できないため受付しません。";
+        AfxMessageBox(scheduleOperationMessage_.c_str(), MB_OK | MB_ICONWARNING);
+        RefreshUi(true);
+        return;
+    }
+    EnqueueScheduleMutation(L"順序変更", writes, std::move(undo));
 }
 
 /**
@@ -652,14 +737,20 @@ void CMainDialog::MoveScheduleItemUp(int row)
     if (row < 0 || coordinator_ == nullptr) {
         return;
     }
+    if (HasPendingScheduleMutation()) {
+        AfxMessageBox(L"前回の予定操作が完了するまで待ってください。", MB_OK | MB_ICONWARNING);
+        return;
+    }
 
     const auto writes = BuildScheduleMoveUpWrites(contentList_.Model(), row);
-    for (const auto& write : writes) {
-        coordinator_->RequestWrite(write.key, write.value);
+    ScheduleUndoEntry undo{L"繰上げ", CaptureScheduleOrderRestoreWrites(contentList_.Model(), {row - 1, row})};
+    if (!writes.empty() && undo.writes.empty()) {
+        scheduleOperationMessage_ = L"繰上げをUndo用に記録できないため受付しません。";
+        AfxMessageBox(scheduleOperationMessage_.c_str(), MB_OK | MB_ICONWARNING);
+        RefreshUi(true);
+        return;
     }
-    if (!writes.empty()) {
-        RefreshUi(false);
-    }
+    EnqueueScheduleMutation(L"繰上げ", writes, std::move(undo));
 }
 
 /**
@@ -684,6 +775,10 @@ void CMainDialog::AddScheduleItem()
     if (coordinator_ == nullptr) {
         return;
     }
+    if (HasPendingScheduleMutation()) {
+        AfxMessageBox(L"前回の予定操作が完了するまで待ってください。", MB_OK | MB_ICONWARNING);
+        return;
+    }
 
     CScheduleAddDialog dialog(this);
     if (dialog.DoModal() != IDOK) {
@@ -691,8 +786,28 @@ void CMainDialog::AddScheduleItem()
     }
 
     const auto request = dialog.Request();
-    coordinator_->RequestWrite({2104, request.containerNo, request.itemNo, DataStyle::Raw}, EncodeScheduleAddValue(request));
-    RefreshUi(false);
+    if (HasScheduleRowBinding(contentList_.Model(), {request.containerNo, request.itemNo})) {
+        scheduleOperationMessage_ = L"追加先の予定行が既に存在するため受付しません。";
+        AfxMessageBox(scheduleOperationMessage_.c_str(), MB_OK | MB_ICONWARNING);
+        RefreshUi(true);
+        return;
+    }
+    if (WarnIfDuplicateScheduleOrder(request.order, {})) {
+        RefreshUi(true);
+        return;
+    }
+
+    const std::vector<ScheduleCellWrite> writes{
+        {{2104, request.containerNo, request.itemNo, DataStyle::Raw}, EncodeScheduleAddValue(request)},
+    };
+    ScheduleUndoEntry undo{L"追加", BuildScheduleAddUndoWrites(request)};
+    if (undo.writes.empty()) {
+        scheduleOperationMessage_ = L"追加をUndo用に記録できないため受付しません。";
+        AfxMessageBox(scheduleOperationMessage_.c_str(), MB_OK | MB_ICONWARNING);
+        RefreshUi(true);
+        return;
+    }
+    EnqueueScheduleMutation(L"追加", writes, std::move(undo));
 }
 
 /**
@@ -703,21 +818,137 @@ void CMainDialog::DeleteScheduleItem(int row)
     if (row < 0 || coordinator_ == nullptr) {
         return;
     }
+    if (HasPendingScheduleMutation()) {
+        AfxMessageBox(L"前回の予定操作が完了するまで待ってください。", MB_OK | MB_ICONWARNING);
+        return;
+    }
 
     const auto binding = contentList_.RowBindingAt(row);
     if (binding.containerNo <= 0 || binding.itemNo <= 0) {
         return;
     }
+    if (row >= static_cast<int>(contentList_.Model().Rows().size())) {
+        return;
+    }
 
-    const std::wstring itemName(contentList_.GetItemText(row, 1).GetString());
-    const std::wstring currentOrder(contentList_.GetItemText(row, 3).GetString());
+    const std::wstring itemName(contentList_.GetItemText(row, ScheduleGridColumn::ItemName).GetString());
+    const std::wstring currentOrder(contentList_.GetItemText(row, ScheduleGridColumn::Order).GetString());
     CScheduleDeleteConfirmDialog dialog(binding.containerNo, binding.itemNo, itemName, currentOrder, this);
     if (dialog.DoModal() != IDOK) {
         return;
     }
 
-    coordinator_->RequestWrite({2105, binding.containerNo, binding.itemNo, DataStyle::Raw}, L"1");
-    RefreshUi(false);
+    const std::vector<ScheduleCellWrite> writes{
+        {{2105, binding.containerNo, binding.itemNo, DataStyle::Raw}, L"1"},
+    };
+    ScheduleUndoEntry undo{L"削除", BuildScheduleDeleteUndoWrites(contentList_.Model().Rows()[static_cast<size_t>(row)])};
+    if (undo.writes.empty()) {
+        scheduleOperationMessage_ = L"削除をUndo用に記録できないため受付しません。";
+        AfxMessageBox(scheduleOperationMessage_.c_str(), MB_OK | MB_ICONWARNING);
+        RefreshUi(true);
+        return;
+    }
+    EnqueueScheduleMutation(L"削除", writes, std::move(undo));
+}
+
+/**
+ * @brief Convert a committed schedule-cell edit into one queued schedule write.
+ */
+void CMainDialog::HandleScheduleGridEdit(const GridEditCommit& commit)
+{
+    if (coordinator_ == nullptr || commit.oldText == commit.newText) {
+        return;
+    }
+    if (HasPendingScheduleMutation()) {
+        scheduleOperationMessage_ = L"前回の予定操作が完了するまでインセル編集は受付しません。";
+        AfxMessageBox(scheduleOperationMessage_.c_str(), MB_OK | MB_ICONWARNING);
+        RefreshUi(true);
+        return;
+    }
+
+    const auto writes = BuildScheduleCellEditWrites(commit.binding, commit.column, commit.kind, commit.newText);
+    if (writes.empty()) {
+        RefreshUi(true);
+        return;
+    }
+    if (commit.column == ScheduleGridColumn::Order) {
+        int newOrder = 0;
+        if (!TryParseScheduleOrderText(commit.newText, newOrder) ||
+            WarnIfDuplicateScheduleOrder(newOrder, commit.binding)) {
+            RefreshUi(true);
+            return;
+        }
+    }
+
+    ScheduleUndoEntry undo{L"セル編集", BuildScheduleCellRestoreWrites(commit.binding, commit.column, commit.oldText)};
+    if (undo.writes.empty()) {
+        scheduleOperationMessage_ = L"セル編集をUndo用に記録できないため受付しません。";
+        AfxMessageBox(scheduleOperationMessage_.c_str(), MB_OK | MB_ICONWARNING);
+        RefreshUi(true);
+        return;
+    }
+    EnqueueScheduleMutation(L"セル編集", writes, std::move(undo));
+}
+
+/**
+ * @brief Renumber visible schedule rows to 10-step order values.
+ */
+void CMainDialog::RenumberScheduleRows()
+{
+    if (coordinator_ == nullptr) {
+        return;
+    }
+    if (HasPendingScheduleMutation()) {
+        AfxMessageBox(L"前回の予定操作が完了するまで待ってください。", MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    std::vector<int> rowIndices;
+    const auto& rows = contentList_.Model().Rows();
+    rowIndices.reserve(rows.size());
+    for (int row = 0; row < static_cast<int>(rows.size()); ++row) {
+        rowIndices.push_back(row);
+    }
+
+    const auto writes = BuildScheduleRenumberWrites(contentList_.Model());
+    if (writes.empty()) {
+        scheduleOperationMessage_ = L"再採番不要";
+        RefreshUi(false);
+        return;
+    }
+
+    ScheduleUndoEntry undo{L"再採番", CaptureScheduleOrderRestoreWrites(contentList_.Model(), rowIndices)};
+    if (undo.writes.empty()) {
+        scheduleOperationMessage_ = L"再採番をUndo用に記録できないため受付しません。";
+        AfxMessageBox(scheduleOperationMessage_.c_str(), MB_OK | MB_ICONWARNING);
+        RefreshUi(true);
+        return;
+    }
+    EnqueueScheduleMutation(L"再採番", writes, std::move(undo));
+}
+
+/**
+ * @brief Execute the newest schedule undo entry.
+ */
+void CMainDialog::UndoScheduleMutation()
+{
+    if (coordinator_ == nullptr) {
+        return;
+    }
+    if (HasPendingScheduleMutation()) {
+        AfxMessageBox(L"前回の予定操作が完了するまで待ってください。", MB_OK | MB_ICONWARNING);
+        return;
+    }
+
+    auto undo = scheduleUndoStack_.Pop();
+    if (!undo.has_value()) {
+        scheduleOperationMessage_ = L"Undo履歴がありません。";
+        RefreshUi(false);
+        return;
+    }
+
+    const auto writes = undo->writes;
+    EnqueueScheduleMutation(L"Undo: " + undo->label, writes, std::move(*undo), true);
 }
 
 /**
@@ -753,6 +984,97 @@ bool CMainDialog::CanMoveScheduleSelectionUp() const
     }
     const int selectedRow = contentList_.GetNextSelectedItem(position);
     return !BuildScheduleMoveUpWrites(contentList_.Model(), selectedRow).empty();
+}
+
+/**
+ * @brief Return whether a schedule write batch is pending.
+ */
+bool CMainDialog::HasPendingScheduleMutation() const noexcept
+{
+    return pendingScheduleMutation_.has_value();
+}
+
+/**
+ * @brief Enqueue a schedule mutation batch and remember its undo action.
+ */
+void CMainDialog::EnqueueScheduleMutation(std::wstring label,
+                                          const std::vector<ScheduleCellWrite>& writes,
+                                          ScheduleUndoEntry undoEntry,
+                                          bool restoreUndoOnFailure)
+{
+    if (coordinator_ == nullptr || writes.empty() || HasPendingScheduleMutation()) {
+        return;
+    }
+
+    const auto metrics = coordinator_->Metrics();
+    PendingScheduleMutation pending;
+    pending.label = std::move(label);
+    pending.expectedWriteCompletedCount = metrics.writeCompletedCount + static_cast<int>(writes.size());
+    pending.baseScheduleMutationErrorCount = metrics.scheduleMutationErrorCount;
+    pending.undoEntry = std::move(undoEntry);
+    pending.restoreUndoOnFailure = restoreUndoOnFailure;
+    pendingScheduleMutation_ = std::move(pending);
+
+    for (const auto& write : writes) {
+        coordinator_->RequestWrite(write.key, write.value);
+    }
+
+    scheduleOperationMessage_ = pendingScheduleMutation_->label + L" 送信中";
+    contentList_.SetEditingEnabled(false);
+    RefreshUi(false);
+}
+
+/**
+ * @brief Complete pending schedule mutation based on scheduler metrics.
+ */
+void CMainDialog::CompletePendingScheduleMutation(const SchedulerMetrics& metrics)
+{
+    if (!pendingScheduleMutation_.has_value() ||
+        metrics.writeCompletedCount < pendingScheduleMutation_->expectedWriteCompletedCount) {
+        return;
+    }
+
+    auto pending = std::move(*pendingScheduleMutation_);
+    pendingScheduleMutation_.reset();
+
+    const bool failed = metrics.scheduleMutationErrorCount > pending.baseScheduleMutationErrorCount ||
+        metrics.lastScheduleMutationErrorCode != BridgeError::Ok ||
+        metrics.lastWriteErrorCode != BridgeError::Ok;
+    if (failed) {
+        if (pending.restoreUndoOnFailure) {
+            scheduleUndoStack_.Restore(std::move(pending.undoEntry));
+        }
+        const auto error = metrics.lastScheduleMutationErrorCode != BridgeError::Ok
+            ? metrics.lastScheduleMutationErrorCode
+            : metrics.lastWriteErrorCode;
+        scheduleOperationMessage_ = pending.label + L" 失敗: " + ToDisplayText(error) + L"。再実行または状態確認を行ってください。";
+        return;
+    }
+
+    if (!pending.restoreUndoOnFailure) {
+        scheduleUndoStack_.Push(std::move(pending.undoEntry));
+    }
+    scheduleOperationMessage_ = pending.label + L" 完了";
+}
+
+/**
+ * @brief Warn and reject when another visible schedule row already has the order.
+ */
+bool CMainDialog::WarnIfDuplicateScheduleOrder(int order, GridRowBinding excludedBinding)
+{
+    const auto duplicate = FindDuplicateScheduleOrder(contentList_.Model(), order, excludedBinding);
+    if (!duplicate.found) {
+        return false;
+    }
+
+    CString message;
+    message.Format(L"同じ出庫順序 %d がコンテナ %d / 品目 %d に既に存在するため受付できません。",
+                   order,
+                   duplicate.binding.containerNo,
+                   duplicate.binding.itemNo);
+    scheduleOperationMessage_ = L"同じ出庫順序のため受付拒否";
+    AfxMessageBox(message, MB_OK | MB_ICONWARNING);
+    return true;
 }
 
 /**
@@ -795,5 +1117,5 @@ const MaintenanceStatusRow* CMainDialog::SelectedMaintenanceRow() const
  */
 CString CMainDialog::ScreenTitle() const
 {
-    return CString(ScreenName(currentScreen_));
+    return ToCString(NavigationLabelForScreen(navItems_, currentScreen_));
 }

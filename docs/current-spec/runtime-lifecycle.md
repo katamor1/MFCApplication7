@@ -35,6 +35,9 @@
 | `/HistorySmoke` | `/SelfTest` と組み合わせると履歴取得スモークを実行する。 |
 | `/MaxLoadSmoke` | `/SelfTest` と組み合わせると最大負荷モックプロファイルで履歴、通常更新、重要更新、複数Writeの併走を確認する。 |
 | `/GridEditSmoke` | `/SelfTest` と組み合わせると `CCustomGridCtrl` の編集開始、確定、キャンセル、セル種別別UIを確認する。 |
+| `/ScheduleGridEditSmoke` | `/SelfTest` と組み合わせると Schedule の品目名、出庫開始予定、出庫終了予定、出庫順序のインセル編集確定からWriteキュー反映までを確認する。 |
+| `/ScheduleUndoSmoke` | `/SelfTest` と組み合わせると Schedule の再採番、追加、削除、順序変更とUndo相当の逆WriteをWriteキュー/readbackで確認する。 |
+| `/NavigationSmoke` | `/SelfTest` と組み合わせると左ナビ項目、1列/2列配置、選択状態、画面名解決を確認する。 |
 | `/DetailSmoke` | `/SelfTest` と組み合わせるとコンテナ詳細/スケジュール詳細モデルとコンテナなし除外を確認する。 |
 | `/ExternalLaunchSmoke` | `/SelfTest` と組み合わせるとFake起動器で外部アプリ起動、二重起動抑止、失敗表示を確認する。 |
 
@@ -71,10 +74,12 @@ UI 更新は MFC UI スレッドの `OnTimer()` から駆動されます。
 2. `timerTicks_` をインクリメントする。
 3. `RefreshUi(timerTicks_ % 15 == 0)` を呼ぶ。
 4. `RefreshUi()` は `Snapshot()` と `Metrics()` を取得する。
-5. Write 完了数が前回から変化していれば、グリッド再構築を強制する。
-6. `RefreshStatus()` で上部ステータスと履歴プログレスを更新する。
-7. `RefreshFunctions()` で F1-F8 ボタンのラベルと有効/無効を更新する。
-8. `forceGrid` が true の場合だけ現在画面のグリッドを再構築する。
+5. Schedule mutation pending が完了していれば、成功時はUndo履歴へ積み、失敗時は復旧メッセージを更新する。
+6. Write 完了数が前回から変化していれば、グリッド再構築を強制する。
+7. Schedule画面では pending 状態に応じてグリッド編集の有効/無効を更新する。
+8. `RefreshStatus()` で上部ステータスと履歴プログレスを更新する。
+9. `RefreshFunctions()` で F1-F8 ボタンのラベルと有効/無効を更新する。
+10. `forceGrid` が true の場合だけ現在画面のグリッドを再構築する。
 
 33ms タイマーは UI 表示の再描画トリガーです。バックエンドの重要更新自体は `UpdateCoordinator::CriticalLoop()` の別スレッドで実行されます。
 
@@ -82,8 +87,8 @@ UI 更新は MFC UI スレッドの `OnTimer()` から駆動されます。
 
 ナビゲーションボタンが押されると `OnNavCommand()` が呼ばれます。
 
-1. ボタン ID から `MainScreenId` を算出する。
-2. `SwitchScreen()` に渡す。
+1. ボタン ID からナビ項目の command index を算出する。
+2. `navItems_` から対応する `MainScreenId` を取得し、`SwitchScreen()` に渡す。
 3. `currentScreen_` を更新する。
 4. `navExpanded_` を false に戻す。
 5. `LayoutControls()` で配置を更新する。

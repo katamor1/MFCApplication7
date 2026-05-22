@@ -129,10 +129,12 @@ struct SchedulerMetrics
     long long maxWriteStartDelayMs{-1};
     int writeStartDelayExceededCount{};
     int writeCompletedCount{};
+    int writeErrorCount{};
     BridgeError lastWriteErrorCode{BridgeError::Ok};
     int scheduleOrderWriteCompletedCount{};
     int scheduleAddCompletedCount{};
     int scheduleDeleteCompletedCount{};
+    int scheduleMutationErrorCount{};
     BridgeError lastScheduleMutationErrorCode{BridgeError::Ok};
     int historyReadCount{};
     int historyErrorCount{};
@@ -232,10 +234,12 @@ private:
     std::atomic<long long> maxWriteStartDelayMs_{-1};
     std::atomic<int> writeStartDelayExceededCount_{0};
     std::atomic<int> writeCompletedCount_{0};
+    std::atomic<int> writeErrorCount_{0};
     std::atomic<int> lastWriteErrorCode_{static_cast<int>(BridgeError::Ok)};
     std::atomic<int> scheduleOrderWriteCompletedCount_{0};
     std::atomic<int> scheduleAddCompletedCount_{0};
     std::atomic<int> scheduleDeleteCompletedCount_{0};
+    std::atomic<int> scheduleMutationErrorCount_{0};
     std::atomic<int> lastScheduleMutationErrorCode_{static_cast<int>(BridgeError::Ok)};
     std::atomic<int> historyReadCount_{0};
     std::atomic<int> historyErrorCount_{0};

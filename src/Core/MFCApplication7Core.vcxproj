@@ -77,6 +77,8 @@
     <ClInclude Include="FunctionBarModel.h" />
     <ClInclude Include="GridModel.h" />
     <ClInclude Include="MockBackendBridge.h" />
+    <ClInclude Include="NavigationModel.h" />
+    <ClInclude Include="ScheduleMutationModel.h" />
     <ClInclude Include="ScreenModels.h" />
     <ClInclude Include="StatusSummary.h" />
     <ClInclude Include="UpdateScheduler.h" />
@@ -90,6 +92,8 @@
     <ClCompile Include="FunctionBarModel.cpp" />
     <ClCompile Include="GridModel.cpp" />
     <ClCompile Include="MockBackendBridge.cpp" />
+    <ClCompile Include="NavigationModel.cpp" />
+    <ClCompile Include="ScheduleMutationModel.cpp" />
     <ClCompile Include="ScreenModels.cpp" />
     <ClCompile Include="StatusSummary.cpp" />
     <ClCompile Include="UpdateScheduler.cpp" />

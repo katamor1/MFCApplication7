@@ -47,15 +47,24 @@ std::vector<FunctionAction> BuildContainerFunctionActions(bool hasSelection, boo
  * @brief Build function bar actions for schedule screen.
  * @param hasSelection Whether an item row is selected.
  * @param canMoveUp Whether the selected row can be swapped with the previous visible row.
+ * @param hasRows Whether schedule rows are currently visible.
+ * @param canUndo Whether a completed mutation has an undo entry.
+ * @param mutationPending Whether a schedule write batch is still pending.
  */
-std::vector<FunctionAction> BuildScheduleFunctionActions(bool hasSelection, bool canMoveUp)
+std::vector<FunctionAction> BuildScheduleFunctionActions(bool hasSelection,
+                                                         bool canMoveUp,
+                                                         bool hasRows,
+                                                         bool canUndo,
+                                                         bool mutationPending)
 {
     auto actions = EightSlots();
     actions[0] = {1, L"details", L"詳細", hasSelection};
-    actions[1] = {2, L"order-change", L"順序変更", hasSelection};
-    actions[2] = {3, L"add", L"追加", true};
-    actions[3] = {4, L"delete", L"削除", hasSelection};
-    actions[4] = {5, L"move-up", L"繰上げ", hasSelection && canMoveUp};
+    actions[1] = {2, L"order-change", L"順序変更", hasSelection && !mutationPending};
+    actions[2] = {3, L"add", L"追加", !mutationPending};
+    actions[3] = {4, L"delete", L"削除", hasSelection && !mutationPending};
+    actions[4] = {5, L"move-up", L"繰上げ", hasSelection && canMoveUp && !mutationPending};
+    actions[5] = {6, L"renumber", L"再採番", hasRows && !mutationPending};
+    actions[6] = {7, L"undo", L"Undo", canUndo && !mutationPending};
     return actions;
 }
 

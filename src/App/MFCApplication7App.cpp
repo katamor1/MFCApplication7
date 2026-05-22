@@ -5,6 +5,8 @@
 #include "ExternalProcessLauncher.h"
 #include "FunctionBarModel.h"
 #include "MainDialog.h"
+#include "NavigationModel.h"
+#include "ScheduleMutationModel.h"
 #include "ScreenModels.h"
 #include "StatusSummary.h"
 #include "UpdateScheduler.h"
@@ -83,6 +85,16 @@ bool HasDetailRow(const ReadOnlyDetailModel& detail, const std::wstring& label, 
 {
     return std::any_of(detail.rows.begin(), detail.rows.end(), [&](const DetailRow& row) {
         return row.label == label && row.value == value;
+    });
+}
+
+/**
+ * @brief Check whether read-only detail rows contain a key and partial value.
+ */
+bool HasDetailRowContaining(const ReadOnlyDetailModel& detail, const std::wstring& label, const std::wstring& value)
+{
+    return std::any_of(detail.rows.begin(), detail.rows.end(), [&](const DetailRow& row) {
+        return row.label == label && row.value.find(value) != std::wstring::npos;
     });
 }
 
@@ -459,8 +471,14 @@ int RunMaintenanceDetailSmoke(const BridgeFactoryOptions& options)
     }
 
     const auto detail = BuildMaintenanceDetailModel(model.rows[1]);
-    if (detail.title.find(model.rows[1].name) == std::wstring::npos || detail.rows.size() < 7) {
+    if (detail.title.find(model.rows[1].name) == std::wstring::npos || detail.rows.size() < 11) {
         return 750;
+    }
+    if (!HasDetailRowContaining(detail, L"原因分類", L"Read") ||
+        !HasDetailRow(detail, L"確認優先度", L"高") ||
+        !HasDetailRowContaining(detail, L"推奨確認", L"通信") ||
+        !HasDetailRowContaining(detail, L"管理者メモ", L"本画面から復旧Writeは行わない")) {
+        return 755;
     }
     const auto actions = BuildMaintenanceFunctionActions(model.rows[1].abnormal);
     if (actions.empty() || !actions[0].enabled || actions[0].label != L"詳細") {
@@ -713,6 +731,52 @@ int RunGridEditSmoke()
 }
 
 /**
+ * @brief Run navigation item and overlay-placement model smoke test.
+ */
+int RunNavigationSmoke()
+{
+    const auto items = BuildDefaultNavigationItems();
+    if (items.size() != 5 ||
+        items[0].screen != MainScreenId::Station ||
+        items[1].screen != MainScreenId::ContainerList ||
+        items[2].screen != MainScreenId::Schedule ||
+        items[3].screen != MainScreenId::System ||
+        items[4].screen != MainScreenId::Maintenance) {
+        return 1420;
+    }
+
+    if (NavigationLabelForScreen(items, MainScreenId::Station) != L"コンテナステーション" ||
+        NavigationLabelForScreen(items, MainScreenId::Maintenance) != L"コンテナ保守") {
+        return 1430;
+    }
+
+    const auto collapsed = BuildNavigationCells(items, MainScreenId::Schedule, false);
+    if (collapsed.size() != 5 || !collapsed[2].selected) {
+        return 1440;
+    }
+    for (int index = 0; index < 5; ++index) {
+        const auto& cell = collapsed[static_cast<size_t>(index)];
+        if (cell.commandIndex != index || cell.column != 0 || cell.row != index) {
+            return 1450;
+        }
+    }
+
+    const auto expanded = BuildNavigationCells(items, MainScreenId::System, true);
+    if (expanded.size() != 5 || !expanded[3].selected) {
+        return 1460;
+    }
+    const int expectedColumns[] = {0, 1, 0, 1, 0};
+    const int expectedRows[] = {0, 0, 1, 1, 2};
+    for (int index = 0; index < 5; ++index) {
+        const auto& cell = expanded[static_cast<size_t>(index)];
+        if (cell.column != expectedColumns[index] || cell.row != expectedRows[index]) {
+            return 1470;
+        }
+    }
+    return 0;
+}
+
+/**
  * @brief Run schedule order sort and move-up write smoke test.
  */
 int RunScheduleOrderSmoke(const BridgeFactoryOptions& options)
@@ -770,6 +834,295 @@ int RunScheduleOrderSmoke(const BridgeFactoryOptions& options)
     }
     if (metrics.lastWriteErrorCode != BridgeError::Ok || metrics.scheduleOrderWriteCompletedCount < 5) {
         return 370;
+    }
+    return 0;
+}
+
+/**
+ * @brief Run schedule editable-cell smoke test through the write queue.
+ */
+int RunScheduleGridEditSmoke(const BridgeFactoryOptions& options)
+{
+    const auto catalog = LoadConfiguredCatalogOrDefault(options.catalogPath);
+    auto bridge = CreateBackendBridge(options);
+    DataGateway gateway(bridge);
+    if (gateway.Connect(options.ipAddress) != BridgeError::Ok) {
+        return 1300;
+    }
+
+    UpdateCoordinator coordinator(catalog, gateway);
+    coordinator.Start();
+    coordinator.RequestWrite({2103, 1, 1, DataStyle::Raw}, L"1234");
+    if (!WaitForWriteCount(coordinator, 1)) {
+        coordinator.Stop();
+        return 1310;
+    }
+
+    CString windowClass = AfxRegisterWndClass(0);
+    CWnd parent;
+    if (!parent.CreateEx(0, windowClass, L"ScheduleGridEditSmoke", WS_OVERLAPPED, CRect(0, 0, 760, 360), nullptr, 0)) {
+        coordinator.Stop();
+        return 1320;
+    }
+
+    CCustomGridCtrl grid;
+    if (!grid.Create(WS_CHILD | WS_VISIBLE | WS_BORDER | LVS_REPORT | LVS_SINGLESEL,
+                     CRect(0, 0, 740, 260),
+                     &parent,
+                     IDC_CONTENT_LIST)) {
+        parent.DestroyWindow();
+        coordinator.Stop();
+        return 1330;
+    }
+    grid.SetExtendedStyle(LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
+    grid.SetEditingEnabled(true);
+    grid.ApplyModel(BuildScheduleGrid(gateway));
+
+    const int targetRow = ScheduleRowIndex(grid.Model(), 1, 1);
+    if (targetRow < 0) {
+        grid.DestroyWindow();
+        parent.DestroyWindow();
+        coordinator.Stop();
+        return 1340;
+    }
+
+    auto commitTextCell = [&](int column, const wchar_t* text, CellKind expectedKind, DataKey expectedKey, int errorBase) {
+        if (!grid.BeginEditCell(targetRow, column)) {
+            return errorBase;
+        }
+        CWnd* edit = grid.GetDlgItem(IDC_GRID_INPLACE_EDIT);
+        if (edit == nullptr) {
+            return errorBase + 1;
+        }
+        edit->SetWindowText(text);
+        edit->SendMessage(WM_KEYDOWN, VK_RETURN, 0);
+
+        const auto commit = grid.LastEditCommit();
+        if (commit.row != targetRow ||
+            commit.column != column ||
+            commit.kind != expectedKind ||
+            commit.binding.containerNo != 1 ||
+            commit.binding.itemNo != 1 ||
+            commit.newText != text) {
+            return errorBase + 2;
+        }
+
+        const auto writes = BuildScheduleCellEditWrites(commit.binding, commit.column, commit.kind, commit.newText);
+        if (writes.size() != 1 || !(writes[0].key == expectedKey) || writes[0].value != text) {
+            return errorBase + 3;
+        }
+        coordinator.RequestWrite(writes[0].key, writes[0].value);
+        return 0;
+    };
+
+    int editResult = commitTextCell(ScheduleGridColumn::ItemName,
+                                    L"UPDATED-ITEM",
+                                    CellKind::Text,
+                                    {2100, 1, 1, DataStyle::Raw},
+                                    1350);
+    if (editResult == 0) {
+        editResult = commitTextCell(ScheduleGridColumn::OutboundStart,
+                                    L"2026/05/23 09:00",
+                                    CellKind::Text,
+                                    {2102, 1, 1, DataStyle::Raw},
+                                    1360);
+    }
+    if (editResult == 0) {
+        editResult = commitTextCell(ScheduleGridColumn::OutboundEnd,
+                                    L"2026/05/23 09:30",
+                                    CellKind::Text,
+                                    {3000, 1, 1, DataStyle::Raw},
+                                    1370);
+    }
+    if (editResult == 0) {
+        editResult = commitTextCell(ScheduleGridColumn::Order,
+                                    L"4321",
+                                    CellKind::Spin,
+                                    {2103, 1, 1, DataStyle::Raw},
+                                    1380);
+    }
+    if (editResult != 0) {
+        grid.DestroyWindow();
+        parent.DestroyWindow();
+        coordinator.Stop();
+        return editResult;
+    }
+
+    if (!WaitForWriteCount(coordinator, 5)) {
+        grid.DestroyWindow();
+        parent.DestroyWindow();
+        coordinator.Stop();
+        return 1390;
+    }
+
+    const auto itemReadback = gateway.Read({2100, 1, 1, DataStyle::Raw});
+    const auto startReadback = gateway.Read({2102, 1, 1, DataStyle::Raw});
+    const auto endReadback = gateway.Read({3000, 1, 1, DataStyle::Raw});
+    const auto orderReadback = gateway.Read({2103, 1, 1, DataStyle::Raw});
+    const auto metrics = coordinator.Metrics();
+    grid.DestroyWindow();
+    parent.DestroyWindow();
+    coordinator.Stop();
+
+    if (itemReadback.errorCode != BridgeError::Ok || itemReadback.displayText != L"UPDATED-ITEM" ||
+        startReadback.errorCode != BridgeError::Ok || startReadback.displayText != L"2026/05/23 09:00" ||
+        endReadback.errorCode != BridgeError::Ok || endReadback.displayText != L"2026/05/23 09:30" ||
+        orderReadback.errorCode != BridgeError::Ok || orderReadback.displayText != L"4321") {
+        return 1400;
+    }
+    if (metrics.lastWriteStartDelayMs < 0 || metrics.lastWriteStartDelayMs > 100) {
+        return 1410;
+    }
+    if (metrics.lastWriteErrorCode != BridgeError::Ok ||
+        metrics.writeCompletedCount < 5 ||
+        metrics.scheduleOrderWriteCompletedCount < 2) {
+        return 1420;
+    }
+    return 0;
+}
+
+/**
+ * @brief Run schedule mutation undo smoke test through write queue readback.
+ */
+int RunScheduleUndoSmoke(const BridgeFactoryOptions& options)
+{
+    const auto catalog = LoadConfiguredCatalogOrDefault(options.catalogPath);
+    auto bridge = CreateBackendBridge(options);
+    DataGateway gateway(bridge);
+    if (gateway.Connect(options.ipAddress) != BridgeError::Ok) {
+        return 1500;
+    }
+
+    UpdateCoordinator coordinator(catalog, gateway);
+    coordinator.Start();
+    int expectedWrites = 0;
+    auto enqueueWrites = [&](const std::vector<ScheduleCellWrite>& writes, int errorCode) {
+        for (const auto& write : writes) {
+            coordinator.RequestWrite(write.key, write.value);
+        }
+        expectedWrites += static_cast<int>(writes.size());
+        return WaitForWriteCount(coordinator, expectedWrites) ? 0 : errorCode;
+    };
+    auto readText = [&](DataKey key) {
+        return gateway.Read(key).displayText;
+    };
+
+    const std::vector<ScheduleCellWrite> seedWrites{
+        {{2103, 2, 1, DataStyle::Raw}, L"100"},
+        {{2103, 10, 1, DataStyle::Raw}, L"200"},
+        {{2103, 1, 1, DataStyle::Raw}, L"300"},
+    };
+    if (const int result = enqueueWrites(seedWrites, 1510); result != 0) {
+        coordinator.Stop();
+        return result;
+    }
+
+    GridModel renumberGrid;
+    renumberGrid.SetColumns({L"コンテナ", L"品目名", L"出庫開始予定", L"出庫終了予定", L"順序"});
+    renumberGrid.AddRow({GridCell::Text(L"2"), GridCell::Text(L"Item-2", CellKind::Text), GridCell::Text(L"start-2", CellKind::Text), GridCell::Text(L"end-2", CellKind::Text), GridCell::Text(L"100", CellKind::Spin)}, {2, 1});
+    renumberGrid.AddRow({GridCell::Text(L"10"), GridCell::Text(L"Item-10", CellKind::Text), GridCell::Text(L"start-10", CellKind::Text), GridCell::Text(L"end-10", CellKind::Text), GridCell::Text(L"200", CellKind::Spin)}, {10, 1});
+    renumberGrid.AddRow({GridCell::Text(L"1"), GridCell::Text(L"Item-1", CellKind::Text), GridCell::Text(L"start-1", CellKind::Text), GridCell::Text(L"end-1", CellKind::Text), GridCell::Text(L"300", CellKind::Spin)}, {1, 1});
+
+    const auto renumberUndo = CaptureScheduleOrderRestoreWrites(renumberGrid, {0, 1, 2});
+    if (const int result = enqueueWrites(BuildScheduleRenumberWrites(renumberGrid), 1520); result != 0) {
+        coordinator.Stop();
+        return result;
+    }
+    if (readText({2103, 2, 1, DataStyle::Raw}) != L"10" ||
+        readText({2103, 10, 1, DataStyle::Raw}) != L"20" ||
+        readText({2103, 1, 1, DataStyle::Raw}) != L"30") {
+        coordinator.Stop();
+        return 1530;
+    }
+    if (const int result = enqueueWrites(renumberUndo, 1540); result != 0) {
+        coordinator.Stop();
+        return result;
+    }
+    if (readText({2103, 2, 1, DataStyle::Raw}) != L"100" ||
+        readText({2103, 10, 1, DataStyle::Raw}) != L"200" ||
+        readText({2103, 1, 1, DataStyle::Raw}) != L"300") {
+        coordinator.Stop();
+        return 1550;
+    }
+
+    const ScheduleAddRequest addRequest{1, 3, 333, L"UNDO-ADD"};
+    const std::vector<ScheduleCellWrite> addWrites{
+        {{2104, addRequest.containerNo, addRequest.itemNo, DataStyle::Raw}, EncodeScheduleAddValue(addRequest)},
+    };
+    const auto addUndo = BuildScheduleAddUndoWrites(addRequest);
+    if (const int result = enqueueWrites(addWrites, 1560); result != 0) {
+        coordinator.Stop();
+        return result;
+    }
+    if (!HasScheduleRow(BuildScheduleGrid(gateway), 1, 3)) {
+        coordinator.Stop();
+        return 1570;
+    }
+    if (const int result = enqueueWrites(addUndo, 1580); result != 0) {
+        coordinator.Stop();
+        return result;
+    }
+    if (HasScheduleRow(BuildScheduleGrid(gateway), 1, 3)) {
+        coordinator.Stop();
+        return 1590;
+    }
+
+    auto deleteGrid = BuildScheduleGrid(gateway);
+    const int deleteRow = ScheduleRowIndex(deleteGrid, 1, 1);
+    if (deleteRow < 0) {
+        coordinator.Stop();
+        return 1600;
+    }
+    const auto deleteUndo = BuildScheduleDeleteUndoWrites(deleteGrid.Rows()[static_cast<size_t>(deleteRow)]);
+    const std::vector<ScheduleCellWrite> deleteWrites{
+        {{2105, 1, 1, DataStyle::Raw}, L"1"},
+    };
+    if (const int result = enqueueWrites(deleteWrites, 1610); result != 0) {
+        coordinator.Stop();
+        return result;
+    }
+    if (HasScheduleRow(BuildScheduleGrid(gateway), 1, 1)) {
+        coordinator.Stop();
+        return 1620;
+    }
+    if (const int result = enqueueWrites(deleteUndo, 1630); result != 0) {
+        coordinator.Stop();
+        return result;
+    }
+    if (!HasScheduleRow(BuildScheduleGrid(gateway), 1, 1)) {
+        coordinator.Stop();
+        return 1640;
+    }
+
+    const auto originalOrder = readText({2103, 2, 1, DataStyle::Raw});
+    const auto orderWrites = BuildScheduleCellEditWrites({2, 1}, ScheduleGridColumn::Order, CellKind::Spin, L"4444");
+    const auto orderUndo = BuildScheduleCellRestoreWrites({2, 1}, ScheduleGridColumn::Order, originalOrder);
+    if (const int result = enqueueWrites(orderWrites, 1650); result != 0) {
+        coordinator.Stop();
+        return result;
+    }
+    if (readText({2103, 2, 1, DataStyle::Raw}) != L"4444") {
+        coordinator.Stop();
+        return 1660;
+    }
+    if (const int result = enqueueWrites(orderUndo, 1670); result != 0) {
+        coordinator.Stop();
+        return result;
+    }
+    if (readText({2103, 2, 1, DataStyle::Raw}) != originalOrder) {
+        coordinator.Stop();
+        return 1680;
+    }
+
+    coordinator.Stop();
+    const auto metrics = coordinator.Metrics();
+    if (metrics.lastWriteStartDelayMs < 0 || metrics.lastWriteStartDelayMs > 100) {
+        return 1690;
+    }
+    if (metrics.lastWriteErrorCode != BridgeError::Ok ||
+        metrics.lastScheduleMutationErrorCode != BridgeError::Ok ||
+        metrics.scheduleMutationErrorCount != 0) {
+        return 1700;
     }
     return 0;
 }
@@ -835,6 +1188,9 @@ int RunSelfTest(const BridgeFactoryOptions& options,
                 bool maintenanceDetailSmoke,
                 bool detailSmoke,
                 bool gridEditSmoke,
+                bool scheduleGridEditSmoke,
+                bool scheduleUndoSmoke,
+                bool navigationSmoke,
                 bool maxLoadSmoke,
                 bool externalLaunchSmoke)
 {
@@ -877,6 +1233,15 @@ int RunSelfTest(const BridgeFactoryOptions& options,
     }
     if (gridEditSmoke) {
         return RunGridEditSmoke();
+    }
+    if (scheduleGridEditSmoke) {
+        return RunScheduleGridEditSmoke(options);
+    }
+    if (scheduleUndoSmoke) {
+        return RunScheduleUndoSmoke(options);
+    }
+    if (navigationSmoke) {
+        return RunNavigationSmoke();
     }
     if (maxLoadSmoke) {
         return RunMaxLoadSmoke(options);
@@ -921,6 +1286,9 @@ BOOL CMFCApplication7App::InitInstance()
                                                     HasArgument(commandLine, L"/MaintenanceDetailSmoke"),
                                                     HasArgument(commandLine, L"/DetailSmoke"),
                                                     HasArgument(commandLine, L"/GridEditSmoke"),
+                                                    HasArgument(commandLine, L"/ScheduleGridEditSmoke"),
+                                                    HasArgument(commandLine, L"/ScheduleUndoSmoke"),
+                                                    HasArgument(commandLine, L"/NavigationSmoke"),
                                                     HasArgument(commandLine, L"/MaxLoadSmoke"),
                                                     HasArgument(commandLine, L"/ExternalLaunchSmoke"))));
     }

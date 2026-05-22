@@ -6,6 +6,8 @@
 #include "FunctionBarModel.h"
 #include "CustomGridCtrl.h"
 #include "ContainerListCtrl.h"
+#include "NavigationModel.h"
+#include "ScheduleMutationModel.h"
 #include "StationLayoutCtrl.h"
 #include "BridgeFactory.h"
 #include "ScreenModels.h"
@@ -16,23 +18,10 @@
 #include <afxdialogex.h>
 #include <afxwin.h>
 
-#include <array>
 #include <memory>
+#include <optional>
 #include <vector>
-
-enum class MainScreenId
-{
-    /** コンテナステーション画面。 */
-    Station = 0,
-    /** コンテナ一覧画面。 */
-    ContainerList = 1,
-    /** スケジュール画面。 */
-    Schedule = 2,
-    /** システム画面。 */
-    System = 3,
-    /** メンテナンス画面。 */
-    Maintenance = 4,
-};
+#include <array>
 
 class CMainDialog final : public CDialogEx
 {
@@ -93,6 +82,10 @@ protected:
      * @brief コンテナ一覧カードクリック時に selectedContainerNo_ を更新する。
      */
     afx_msg void OnContainerListLayoutClicked();
+    /**
+     * @brief グリッド編集確定通知を処理する。
+     */
+    afx_msg LRESULT OnGridEditCommitted(WPARAM wParam, LPARAM lParam);
 
     DECLARE_MESSAGE_MAP()
 
@@ -166,6 +159,18 @@ private:
      */
     void DeleteScheduleItem(int row);
     /**
+     * @brief スケジュール順序セルの編集確定をWriteキューへ反映する。
+     */
+    void HandleScheduleGridEdit(const GridEditCommit& commit);
+    /**
+     * @brief 現在表示順でSchedule順序を10刻みに再採番する。
+     */
+    void RenumberScheduleRows();
+    /**
+     * @brief 直近のSchedule操作をUndoする。
+     */
+    void UndoScheduleMutation();
+    /**
      * @brief 選択中の外部アプリ行を起動する。
      */
     void LaunchSelectedExternalApp();
@@ -173,6 +178,25 @@ private:
      * @brief 現在のスケジュール選択が繰上げ可能か判定する。
      */
     bool CanMoveScheduleSelectionUp() const;
+    /**
+     * @brief Schedule mutation batch が完了待ちかを返す。
+     */
+    bool HasPendingScheduleMutation() const noexcept;
+    /**
+     * @brief Schedule mutation Write 群を一括投入し、完了後のUndo制御情報を保持する。
+     */
+    void EnqueueScheduleMutation(std::wstring label,
+                                 const std::vector<ScheduleCellWrite>& writes,
+                                 ScheduleUndoEntry undoEntry,
+                                 bool restoreUndoOnFailure = false);
+    /**
+     * @brief pending中のSchedule mutationが完了した場合に履歴/失敗表示を更新する。
+     */
+    void CompletePendingScheduleMutation(const SchedulerMetrics& metrics);
+    /**
+     * @brief 同じ出庫順序が既に存在する場合に警告して true を返す。
+     */
+    bool WarnIfDuplicateScheduleOrder(int order, GridRowBinding excludedBinding);
     /**
      * @brief システム画面で選択中の外部アプリIDを取得する。
      */
@@ -195,17 +219,31 @@ private:
     ExternalLaunchResult lastExternalLaunchResult_;
     bool hasExternalLaunchResult_{false};
 
+    struct PendingScheduleMutation
+    {
+        std::wstring label;
+        int expectedWriteCompletedCount{};
+        int baseScheduleMutationErrorCount{};
+        ScheduleUndoEntry undoEntry;
+        bool restoreUndoOnFailure{false};
+    };
+
     CStatic statusText_;
     CProgressCtrl historyProgress_;
     CStatic detailText_;
     CCustomGridCtrl contentList_;
     CContainerListCtrl containerListLayout_;
     CStationLayoutCtrl stationLayout_;
+    CStatic navOverlay_;
     CButton expandButton_;
-    std::array<CButton, 5> navButtons_;
+    std::vector<NavigationItem> navItems_;
+    std::vector<std::unique_ptr<CButton>> navButtons_;
     std::array<CButton, 8> functionButtons_;
 
     MaintenanceStatusModel currentMaintenanceStatus_;
+    ScheduleUndoStack scheduleUndoStack_{20};
+    std::optional<PendingScheduleMutation> pendingScheduleMutation_;
+    std::wstring scheduleOperationMessage_;
     MainScreenId currentScreen_{MainScreenId::Station};
     bool navExpanded_{false};
     int selectedContainerNo_{1};

@@ -21,6 +21,12 @@ constexpr size_t kHistorySnapshotLimit = 500;
 constexpr size_t kHistoryBatchSize = 10;
 constexpr int kConsecutiveHistoryErrorLimit = 50;
 
+bool IsScheduleMutationDataId(int dataId) noexcept
+{
+    return dataId == 2100 || dataId == 2102 || dataId == 2103 || dataId == 2104 ||
+        dataId == 2105 || dataId == 3000;
+}
+
 void StoreMax(std::atomic<long long>& target, long long value) noexcept
 {
     auto current = target.load();
@@ -288,10 +294,12 @@ SchedulerMetrics UpdateCoordinator::Metrics() const noexcept
     metrics.maxWriteStartDelayMs = maxWriteStartDelayMs_.load();
     metrics.writeStartDelayExceededCount = writeStartDelayExceededCount_.load();
     metrics.writeCompletedCount = writeCompletedCount_.load();
+    metrics.writeErrorCount = writeErrorCount_.load();
     metrics.lastWriteErrorCode = static_cast<BridgeError>(lastWriteErrorCode_.load());
     metrics.scheduleOrderWriteCompletedCount = scheduleOrderWriteCompletedCount_.load();
     metrics.scheduleAddCompletedCount = scheduleAddCompletedCount_.load();
     metrics.scheduleDeleteCompletedCount = scheduleDeleteCompletedCount_.load();
+    metrics.scheduleMutationErrorCount = scheduleMutationErrorCount_.load();
     metrics.lastScheduleMutationErrorCode = static_cast<BridgeError>(lastScheduleMutationErrorCode_.load());
     metrics.historyReadCount = historyReadCount_.load();
     metrics.historyErrorCount = historyErrorCount_.load();
@@ -379,15 +387,21 @@ void UpdateCoordinator::WriteLoop()
         }
         const auto error = gateway_.Write(request.key, request.value);
         lastWriteErrorCode_ = static_cast<int>(error);
+        if (error != BridgeError::Ok) {
+            ++writeErrorCount_;
+        }
+        if (IsScheduleMutationDataId(request.key.dataId)) {
+            lastScheduleMutationErrorCode_ = static_cast<int>(error);
+            if (error != BridgeError::Ok) {
+                ++scheduleMutationErrorCount_;
+            }
+        }
         if (request.key.dataId == 2103) {
             ++scheduleOrderWriteCompletedCount_;
-            lastScheduleMutationErrorCode_ = static_cast<int>(error);
         } else if (request.key.dataId == 2104) {
             ++scheduleAddCompletedCount_;
-            lastScheduleMutationErrorCode_ = static_cast<int>(error);
         } else if (request.key.dataId == 2105) {
             ++scheduleDeleteCompletedCount_;
-            lastScheduleMutationErrorCode_ = static_cast<int>(error);
         }
         ++writeCompletedCount_;
     }

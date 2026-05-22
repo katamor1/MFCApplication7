@@ -94,6 +94,22 @@ bool IsMaintenanceAbnormal(const MaintenanceStatusRow& row)
 }
 
 /**
+ * @brief Return true when a maintenance row has no acquired display value.
+ */
+bool IsMaintenanceMissingValue(const MaintenanceStatusRow& row)
+{
+    return row.displayText.empty() || row.displayText == L"未取得";
+}
+
+/**
+ * @brief Return true when a maintenance row contains abnormal status wording.
+ */
+bool HasMaintenanceAbnormalText(const MaintenanceStatusRow& row)
+{
+    return row.displayText.find(L"異常") != std::wstring::npos;
+}
+
+/**
  * @brief Return true when a launch result belongs to the requested app.
  */
 bool MatchesLaunchResult(const ExternalLaunchResult* result, const std::wstring& appId)
@@ -305,8 +321,9 @@ GridModel BuildScheduleGrid(const DataGateway& gateway)
             entries.push_back({
                 {
                 GridCell::Text(std::to_wstring(containerNo)),
-                GridCell::Text(itemName),
-                GridCell::Text(ReadText(gateway, {3000, containerNo, itemNo, DataStyle::Raw})),
+                GridCell::Text(itemName, CellKind::Text),
+                GridCell::Text(ReadText(gateway, {2102, containerNo, itemNo, DataStyle::Raw}), CellKind::Text),
+                GridCell::Text(ReadText(gateway, {3000, containerNo, itemNo, DataStyle::Raw}), CellKind::Text),
                 GridCell::Text(orderText, CellKind::Spin),
                 },
                 {containerNo, itemNo},
@@ -330,7 +347,7 @@ GridModel BuildScheduleGrid(const DataGateway& gateway)
     });
 
     GridModel grid;
-    grid.SetColumns({L"コンテナ", L"品目名", L"出庫終了予定", L"順序"});
+    grid.SetColumns({L"コンテナ", L"品目名", L"出庫開始予定", L"出庫終了予定", L"順序"});
     for (auto& entry : entries) {
         grid.AddRow(std::move(entry.cells), entry.binding);
     }
@@ -361,7 +378,7 @@ ReadOnlyDetailModel BuildScheduleDetailModel(const DataGateway& gateway, GridRow
 /**
  * @brief Build the two order writes needed to swap selected row with previous visible row.
  */
-std::vector<ScheduleOrderWrite> BuildScheduleMoveUpWrites(const GridModel& grid, int selectedRow)
+std::vector<ScheduleCellWrite> BuildScheduleMoveUpWrites(const GridModel& grid, int selectedRow)
 {
     if (selectedRow <= 0 || selectedRow >= static_cast<int>(grid.Rows().size())) {
         return {};
@@ -371,20 +388,68 @@ std::vector<ScheduleOrderWrite> BuildScheduleMoveUpWrites(const GridModel& grid,
     const auto& selected = grid.Rows()[static_cast<size_t>(selectedRow)];
     if (previous.binding.containerNo <= 0 || previous.binding.itemNo <= 0 ||
         selected.binding.containerNo <= 0 || selected.binding.itemNo <= 0 ||
-        previous.cells.size() <= 3 || selected.cells.size() <= 3) {
+        previous.cells.size() <= ScheduleGridColumn::Order || selected.cells.size() <= ScheduleGridColumn::Order) {
         return {};
     }
 
     int previousOrder = 0;
     int selectedOrder = 0;
-    if (!TryParsePositiveInt(previous.cells[3].text, previousOrder) ||
-        !TryParsePositiveInt(selected.cells[3].text, selectedOrder)) {
+    if (!TryParsePositiveInt(previous.cells[ScheduleGridColumn::Order].text, previousOrder) ||
+        !TryParsePositiveInt(selected.cells[ScheduleGridColumn::Order].text, selectedOrder)) {
         return {};
     }
 
     return {
         {{2103, selected.binding.containerNo, selected.binding.itemNo, DataStyle::Raw}, std::to_wstring(previousOrder)},
         {{2103, previous.binding.containerNo, previous.binding.itemNo, DataStyle::Raw}, std::to_wstring(selectedOrder)},
+    };
+}
+
+/**
+ * @brief Build one write for a valid in-cell schedule edit.
+ */
+std::vector<ScheduleCellWrite> BuildScheduleCellEditWrites(GridRowBinding binding,
+                                                           int column,
+                                                           CellKind kind,
+                                                           const std::wstring& value)
+{
+    constexpr int kMaxOrder = 9999;
+
+    if (binding.containerNo <= 0 || binding.itemNo <= 0) {
+        return {};
+    }
+
+    if (column == ScheduleGridColumn::ItemName ||
+        column == ScheduleGridColumn::OutboundStart ||
+        column == ScheduleGridColumn::OutboundEnd) {
+        if (kind != CellKind::Text || value.empty()) {
+            return {};
+        }
+
+        int dataId = 0;
+        if (column == ScheduleGridColumn::ItemName) {
+            dataId = 2100;
+        } else if (column == ScheduleGridColumn::OutboundStart) {
+            dataId = 2102;
+        } else {
+            dataId = 3000;
+        }
+        return {
+            {{dataId, binding.containerNo, binding.itemNo, DataStyle::Raw}, value},
+        };
+    }
+
+    if (column != ScheduleGridColumn::Order || kind != CellKind::Spin) {
+        return {};
+    }
+
+    int order = 0;
+    if (!TryParsePositiveInt(value, order) || order > kMaxOrder) {
+        return {};
+    }
+
+    return {
+        {{2103, binding.containerNo, binding.itemNo, DataStyle::Raw}, value},
     };
 }
 
@@ -473,7 +538,7 @@ MaintenanceStatusModel BuildMaintenanceStatusModel(const DataCatalog& catalog, c
             const auto& value = snapshot.criticalValues[index];
             row.displayText = value.displayText.empty() ? L"未取得" : value.displayText;
             row.errorCode = value.errorCode;
-            row.stale = value.stale || value.errorCode != BridgeError::Ok || value.displayText.empty();
+            row.stale = value.stale || value.errorCode != BridgeError::Ok;
         } else {
             row.displayText = L"未取得";
             row.errorCode = BridgeError::InternalError;
@@ -482,6 +547,7 @@ MaintenanceStatusModel BuildMaintenanceStatusModel(const DataCatalog& catalog, c
 
         row.abnormal = IsMaintenanceAbnormal(row);
         row.operationAvailable = row.abnormal;
+        row.supportHint = BuildMaintenanceSupportHint(row);
         if (row.abnormal) {
             ++model.abnormalCount;
         }
@@ -492,10 +558,69 @@ MaintenanceStatusModel BuildMaintenanceStatusModel(const DataCatalog& catalog, c
 }
 
 /**
+ * @brief Build read-only operator support hints for one maintenance status row.
+ */
+MaintenanceSupportHint BuildMaintenanceSupportHint(const MaintenanceStatusRow& row)
+{
+    constexpr const wchar_t* kNoRecoveryWriteNote =
+        L"正式な復旧操作IDが未定義のため、本画面から復旧Writeは行わない。";
+
+    MaintenanceSupportHint hint;
+    hint.operatorNote = kNoRecoveryWriteNote;
+
+    if (!row.abnormal) {
+        hint.reason = MaintenanceAbnormalReason::None;
+        hint.reasonText = L"なし";
+        hint.priorityText = L"通常";
+        hint.recommendedCheck = L"追加確認不要。";
+        return hint;
+    }
+
+    if (row.errorCode != BridgeError::Ok) {
+        hint.reason = MaintenanceAbnormalReason::ReadError;
+        hint.reasonText = L"ReadError";
+        hint.priorityText = L"高";
+        hint.recommendedCheck = L"通信、COM接続、対象装置の状態を確認してください。";
+        return hint;
+    }
+
+    if (row.stale) {
+        hint.reason = MaintenanceAbnormalReason::Stale;
+        hint.reasonText = L"Stale";
+        hint.priorityText = L"中";
+        hint.recommendedCheck = L"重要情報の最新値を再確認してください。";
+        return hint;
+    }
+
+    if (IsMaintenanceMissingValue(row)) {
+        hint.reason = MaintenanceAbnormalReason::MissingValue;
+        hint.reasonText = L"MissingValue";
+        hint.priorityText = L"中";
+        hint.recommendedCheck = L"重要情報の取得状態を確認してください。";
+        return hint;
+    }
+
+    if (HasMaintenanceAbnormalText(row)) {
+        hint.reason = MaintenanceAbnormalReason::AbnormalText;
+        hint.reasonText = L"AbnormalText";
+        hint.priorityText = L"高";
+        hint.recommendedCheck = L"コンテナコントローラで該当状態を確認してください。";
+        return hint;
+    }
+
+    hint.reason = MaintenanceAbnormalReason::Unknown;
+    hint.reasonText = L"Unknown";
+    hint.priorityText = L"中";
+    hint.recommendedCheck = L"重要情報の状態を確認してください。";
+    return hint;
+}
+
+/**
  * @brief Build read-only detail rows for one maintenance status row.
  */
 ReadOnlyDetailModel BuildMaintenanceDetailModel(const MaintenanceStatusRow& row)
 {
+    const auto supportHint = row.supportHint.reasonText.empty() ? BuildMaintenanceSupportHint(row) : row.supportHint;
     ReadOnlyDetailModel detail;
     detail.title = L"保守詳細: " + row.name;
     detail.rows = {
@@ -506,6 +631,10 @@ ReadOnlyDetailModel BuildMaintenanceDetailModel(const MaintenanceStatusRow& row)
         {L"エラー", ToDisplayText(row.errorCode)},
         {L"stale", row.stale ? L"true" : L"false"},
         {L"操作可", row.operationAvailable ? L"true" : L"false"},
+        {L"原因分類", supportHint.reasonText},
+        {L"確認優先度", supportHint.priorityText},
+        {L"推奨確認", supportHint.recommendedCheck},
+        {L"管理者メモ", supportHint.operatorNote},
     };
     return detail;
 }

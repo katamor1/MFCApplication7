@@ -3,6 +3,8 @@
 #include "FunctionBarModel.h"
 #include "GridModel.h"
 #include "MockBackendBridge.h"
+#include "NavigationModel.h"
+#include "ScheduleMutationModel.h"
 #include "ScreenModels.h"
 #include "StatusSummary.h"
 #include "UpdateScheduler.h"
@@ -230,28 +232,80 @@ void TestFunctionSlotFromVirtualKey()
 }
 
 /**
- * @brief Verify schedule actions expose order changes only with a selection.
+ * @brief Verify default navigation items and their one/two-column layouts.
+ */
+void TestNavigationModelBuildsDefaultCells()
+{
+    const auto items = BuildDefaultNavigationItems();
+    Check(items.size() == 5, "default navigation should expose five screens");
+    Check(items[0].screen == MainScreenId::Station && items[0].shortLabel == L"ST", "station should be first navigation item");
+    Check(items[1].screen == MainScreenId::ContainerList && items[1].shortLabel == L"LIST", "container list should be second navigation item");
+    Check(items[2].screen == MainScreenId::Schedule && items[2].shortLabel == L"SCH", "schedule should be third navigation item");
+    Check(items[3].screen == MainScreenId::System && items[3].shortLabel == L"SYS", "system should be fourth navigation item");
+    Check(items[4].screen == MainScreenId::Maintenance && items[4].shortLabel == L"MNT", "maintenance should be fifth navigation item");
+
+    Check(NavigationLabelForScreen(items, MainScreenId::Station) == L"コンテナステーション", "station navigation label should be Japanese");
+    Check(NavigationLabelForScreen(items, MainScreenId::ContainerList) == L"コンテナ一覧", "container list navigation label should be Japanese");
+    Check(NavigationLabelForScreen(items, MainScreenId::Schedule) == L"コンテナスケジュール", "schedule navigation label should be Japanese");
+    Check(NavigationLabelForScreen(items, MainScreenId::System) == L"システム", "system navigation label should be Japanese");
+    Check(NavigationLabelForScreen(items, MainScreenId::Maintenance) == L"コンテナ保守", "maintenance navigation label should be Japanese");
+
+    const auto collapsed = BuildNavigationCells(items, MainScreenId::Schedule, false);
+    Check(collapsed.size() == 5, "collapsed navigation should keep all items");
+    for (int index = 0; index < 5; ++index) {
+        Check(collapsed[static_cast<size_t>(index)].column == 0, "collapsed navigation should use one column");
+        Check(collapsed[static_cast<size_t>(index)].row == index, "collapsed navigation row should follow item order");
+    }
+    Check(collapsed[2].selected, "collapsed navigation should mark current screen");
+    Check(!collapsed[0].selected && !collapsed[4].selected, "collapsed navigation should not mark other screens");
+
+    const auto expanded = BuildNavigationCells(items, MainScreenId::System, true);
+    Check(expanded[0].column == 0 && expanded[0].row == 0, "expanded station cell should be left top");
+    Check(expanded[1].column == 1 && expanded[1].row == 0, "expanded list cell should be right top");
+    Check(expanded[2].column == 0 && expanded[2].row == 1, "expanded schedule cell should be left second row");
+    Check(expanded[3].column == 1 && expanded[3].row == 1, "expanded system cell should be right second row");
+    Check(expanded[4].column == 0 && expanded[4].row == 2, "expanded maintenance cell should be left third row");
+    Check(expanded[3].selected, "expanded navigation should mark selected screen");
+}
+
+/**
+ * @brief Verify schedule actions expose mutation buttons according to schedule state.
  */
 void TestScheduleFunctionActionsExposeOrderChangeOnlyForSelection()
 {
-    const auto none = BuildScheduleFunctionActions(false, false);
+    const auto none = BuildScheduleFunctionActions(false, false, false, false, false);
     Check(none.size() == 8, "schedule actions should always expose 8 slots");
     Check(!none[0].enabled, "schedule details should be disabled without selection");
     Check(!none[1].enabled, "schedule order change should be disabled without selection");
     Check(none[2].enabled && none[2].id == L"add", "schedule add should be enabled without selection");
     Check(!none[3].enabled, "schedule delete should be disabled without selection");
     Check(!none[4].enabled, "schedule move-up should be disabled without selection");
+    Check(!none[5].enabled && none[5].id == L"renumber", "schedule renumber should need rows");
+    Check(!none[6].enabled && none[6].id == L"undo", "schedule undo should need history");
 
-    const auto selected = BuildScheduleFunctionActions(true, true);
+    const auto selected = BuildScheduleFunctionActions(true, true, true, true, false);
     Check(selected[0].enabled && selected[0].id == L"details", "schedule details should be enabled with selection");
     Check(selected[1].enabled && selected[1].id == L"order-change", "schedule F2 should edit order with selection");
     Check(selected[1].label == L"順序変更", "schedule F2 should be labeled for order change");
     Check(selected[2].enabled && selected[2].id == L"add", "schedule F3 should add schedule rows");
     Check(selected[3].enabled && selected[3].id == L"delete", "schedule F4 should delete selected rows");
     Check(selected[4].enabled && selected[4].id == L"move-up", "schedule F5 should move selected rows up");
+    Check(selected[5].enabled && selected[5].id == L"renumber", "schedule F6 should renumber visible rows");
+    Check(selected[5].label == L"再採番", "schedule F6 should be labeled for renumber");
+    Check(selected[6].enabled && selected[6].id == L"undo", "schedule F7 should undo completed mutations");
 
-    const auto first = BuildScheduleFunctionActions(true, false);
+    const auto first = BuildScheduleFunctionActions(true, false, true, false, false);
     Check(!first[4].enabled, "schedule F5 should be disabled for first row");
+    Check(first[5].enabled, "schedule F6 should be enabled when rows exist");
+
+    const auto pending = BuildScheduleFunctionActions(true, true, true, true, true);
+    Check(pending[0].enabled, "schedule details should stay available while mutation is pending");
+    Check(!pending[1].enabled, "schedule F2 should be disabled while mutation is pending");
+    Check(!pending[2].enabled, "schedule F3 should be disabled while mutation is pending");
+    Check(!pending[3].enabled, "schedule F4 should be disabled while mutation is pending");
+    Check(!pending[4].enabled, "schedule F5 should be disabled while mutation is pending");
+    Check(!pending[5].enabled, "schedule F6 should be disabled while mutation is pending");
+    Check(!pending[6].enabled, "schedule F7 should be disabled while mutation is pending");
 }
 
 /**
@@ -319,8 +373,11 @@ void TestScheduleGridBindsRowsToContainerItems()
     const auto& firstRow = grid.Rows().front();
     Check(firstRow.binding.containerNo == 1, "first schedule row should bind container 1");
     Check(firstRow.binding.itemNo == 1, "first schedule row should bind item 1");
-    Check(firstRow.cells.size() == 4, "schedule row should keep four cells");
-    Check(firstRow.cells[3].kind == CellKind::Spin, "schedule order cell should remain spin kind");
+    Check(firstRow.cells.size() == 5, "schedule row should keep five cells");
+    Check(firstRow.cells[ScheduleGridColumn::ItemName].kind == CellKind::Text, "schedule item name cell should be editable text");
+    Check(firstRow.cells[ScheduleGridColumn::OutboundStart].kind == CellKind::Text, "schedule outbound start cell should be editable text");
+    Check(firstRow.cells[ScheduleGridColumn::OutboundEnd].kind == CellKind::Text, "schedule outbound end cell should be editable text");
+    Check(firstRow.cells[ScheduleGridColumn::Order].kind == CellKind::Spin, "schedule order cell should remain spin kind");
 }
 
 /**
@@ -344,7 +401,7 @@ void TestScheduleGridSortsByOutboundOrder()
 
     int previousOrder = 0;
     for (const auto& row : grid.Rows()) {
-        const int currentOrder = std::stoi(row.cells[3].text);
+        const int currentOrder = std::stoi(row.cells[ScheduleGridColumn::Order].text);
         Check(currentOrder >= previousOrder, "schedule rows should be non-decreasing by order");
         previousOrder = currentOrder;
     }
@@ -380,8 +437,8 @@ bool HasScheduleRow(const GridModel& grid, int containerNo, int itemNo, std::wst
             if (itemName != nullptr && row.cells.size() > 1) {
                 *itemName = row.cells[1].text;
             }
-            if (order != nullptr && row.cells.size() > 3) {
-                *order = row.cells[3].text;
+            if (order != nullptr && row.cells.size() > ScheduleGridColumn::Order) {
+                *order = row.cells[ScheduleGridColumn::Order].text;
             }
             return true;
         }
@@ -433,9 +490,9 @@ void TestMockScheduleAddAndDeleteReflectInGrid()
 void TestBuildScheduleMoveUpWrites()
 {
     GridModel grid;
-    grid.SetColumns({L"コンテナ", L"品目名", L"出庫終了予定", L"順序"});
-    grid.AddRow({GridCell::Text(L"1"), GridCell::Text(L"A"), GridCell::Text(L""), GridCell::Text(L"10", CellKind::Spin)}, {1, 1});
-    grid.AddRow({GridCell::Text(L"2"), GridCell::Text(L"B"), GridCell::Text(L""), GridCell::Text(L"20", CellKind::Spin)}, {2, 1});
+    grid.SetColumns({L"コンテナ", L"品目名", L"出庫開始予定", L"出庫終了予定", L"順序"});
+    grid.AddRow({GridCell::Text(L"1"), GridCell::Text(L"A", CellKind::Text), GridCell::Text(L"start-a", CellKind::Text), GridCell::Text(L"end-a", CellKind::Text), GridCell::Text(L"10", CellKind::Spin)}, {1, 1});
+    grid.AddRow({GridCell::Text(L"2"), GridCell::Text(L"B", CellKind::Text), GridCell::Text(L"start-b", CellKind::Text), GridCell::Text(L"end-b", CellKind::Text), GridCell::Text(L"20", CellKind::Spin)}, {2, 1});
 
     const auto writes = BuildScheduleMoveUpWrites(grid, 1);
     Check(writes.size() == 2, "move-up should emit two order writes");
@@ -448,10 +505,154 @@ void TestBuildScheduleMoveUpWrites()
     Check(BuildScheduleMoveUpWrites(grid, -1).empty(), "negative row should not move up");
 
     GridModel invalidGrid;
-    invalidGrid.SetColumns({L"コンテナ", L"品目名", L"出庫終了予定", L"順序"});
-    invalidGrid.AddRow({GridCell::Text(L"1"), GridCell::Text(L"A"), GridCell::Text(L""), GridCell::Text(L"bad", CellKind::Spin)}, {1, 1});
-    invalidGrid.AddRow({GridCell::Text(L"2"), GridCell::Text(L"B"), GridCell::Text(L""), GridCell::Text(L"20", CellKind::Spin)}, {2, 1});
+    invalidGrid.SetColumns({L"コンテナ", L"品目名", L"出庫開始予定", L"出庫終了予定", L"順序"});
+    invalidGrid.AddRow({GridCell::Text(L"1"), GridCell::Text(L"A", CellKind::Text), GridCell::Text(L"start-a", CellKind::Text), GridCell::Text(L"end-a", CellKind::Text), GridCell::Text(L"bad", CellKind::Spin)}, {1, 1});
+    invalidGrid.AddRow({GridCell::Text(L"2"), GridCell::Text(L"B", CellKind::Text), GridCell::Text(L"start-b", CellKind::Text), GridCell::Text(L"end-b", CellKind::Text), GridCell::Text(L"20", CellKind::Spin)}, {2, 1});
     Check(BuildScheduleMoveUpWrites(invalidGrid, 1).empty(), "non-numeric order should not move up");
+}
+
+/**
+ * @brief Verify renumber helper rewrites visible order values in 10-step order.
+ */
+void TestBuildScheduleRenumberWrites()
+{
+    GridModel grid;
+    grid.SetColumns({L"コンテナ", L"品目名", L"出庫開始予定", L"出庫終了予定", L"順序"});
+    grid.AddRow({GridCell::Text(L"1"), GridCell::Text(L"A", CellKind::Text), GridCell::Text(L"start-a", CellKind::Text), GridCell::Text(L"end-a", CellKind::Text), GridCell::Text(L"10", CellKind::Spin)}, {1, 1});
+    grid.AddRow({GridCell::Text(L"2"), GridCell::Text(L"B", CellKind::Text), GridCell::Text(L"start-b", CellKind::Text), GridCell::Text(L"end-b", CellKind::Text), GridCell::Text(L"25", CellKind::Spin)}, {2, 1});
+    grid.AddRow({GridCell::Text(L"3"), GridCell::Text(L"C", CellKind::Text), GridCell::Text(L"start-c", CellKind::Text), GridCell::Text(L"end-c", CellKind::Text), GridCell::Text(L"bad", CellKind::Spin)}, {3, 1});
+
+    const auto writes = BuildScheduleRenumberWrites(grid);
+    Check(writes.size() == 2, "renumber should skip rows already holding the target value");
+    Check(writes[0].key == DataKey{2103, 2, 1, DataStyle::Raw}, "renumber second row should target 2103 raw");
+    Check(writes[0].value == L"20", "renumber second row should write 20");
+    Check(writes[1].key == DataKey{2103, 3, 1, DataStyle::Raw}, "renumber third row should target 2103 raw");
+    Check(writes[1].value == L"30", "renumber third row should write 30");
+
+    const auto restore = CaptureScheduleOrderRestoreWrites(grid, {0, 2});
+    Check(restore.size() == 2, "restore capture should emit one write per requested valid row");
+    Check(restore[0].key == DataKey{2103, 1, 1, DataStyle::Raw}, "restore should target first row order");
+    Check(restore[0].value == L"10", "restore should preserve first row order text");
+    Check(restore[1].key == DataKey{2103, 3, 1, DataStyle::Raw}, "restore should target third row order");
+    Check(restore[1].value == L"bad", "restore should preserve non-empty original order text");
+}
+
+/**
+ * @brief Verify duplicate-order detection can ignore the edited row.
+ */
+void TestScheduleDuplicateOrderDetection()
+{
+    GridModel grid;
+    grid.SetColumns({L"コンテナ", L"品目名", L"出庫開始予定", L"出庫終了予定", L"順序"});
+    grid.AddRow({GridCell::Text(L"1"), GridCell::Text(L"A", CellKind::Text), GridCell::Text(L"start-a", CellKind::Text), GridCell::Text(L"end-a", CellKind::Text), GridCell::Text(L"10", CellKind::Spin)}, {1, 1});
+    grid.AddRow({GridCell::Text(L"2"), GridCell::Text(L"B", CellKind::Text), GridCell::Text(L"start-b", CellKind::Text), GridCell::Text(L"end-b", CellKind::Text), GridCell::Text(L"20", CellKind::Spin)}, {2, 1});
+
+    const auto duplicate = FindDuplicateScheduleOrder(grid, 20, {});
+    Check(duplicate.found, "existing schedule order should be detected as duplicate");
+    Check(duplicate.row == 1, "duplicate result should include row index");
+    Check(duplicate.binding.containerNo == 2 && duplicate.binding.itemNo == 1, "duplicate result should include binding");
+
+    const auto skipped = FindDuplicateScheduleOrder(grid, 20, {2, 1});
+    Check(!skipped.found, "duplicate detection should skip the current binding");
+    Check(!FindDuplicateScheduleOrder(grid, 99, {}).found, "unknown order should not be duplicate");
+    Check(HasScheduleRowBinding(grid, {1, 1}), "row binding lookup should find existing rows");
+    Check(!HasScheduleRowBinding(grid, {1, 3}), "row binding lookup should reject missing rows");
+}
+
+/**
+ * @brief Verify undo stack is LIFO and bounded to the configured maximum.
+ */
+void TestScheduleUndoStack()
+{
+    ScheduleUndoStack stack(20);
+    for (int index = 0; index < 21; ++index) {
+        ScheduleUndoEntry entry;
+        entry.label = L"undo-" + std::to_wstring(index);
+        entry.writes = {{{2103, index + 1, 1, DataStyle::Raw}, std::to_wstring(index)}};
+        stack.Push(std::move(entry));
+    }
+
+    Check(stack.Size() == 20, "undo stack should drop the oldest item above max size");
+    auto latest = stack.Pop();
+    Check(latest.has_value(), "undo stack should pop latest item");
+    Check(latest->label == L"undo-20", "undo stack should pop in LIFO order");
+    auto next = stack.Pop();
+    Check(next.has_value() && next->label == L"undo-19", "undo stack should continue LIFO order");
+
+    stack.Restore(std::move(*latest));
+    auto restored = stack.Pop();
+    Check(restored.has_value() && restored->label == L"undo-20", "undo restore should put failed undo back on top");
+}
+
+/**
+ * @brief Verify add/delete operations can build inverse writes for Undo.
+ */
+void TestScheduleUndoWriteBuilders()
+{
+    const auto cellUndo = BuildScheduleCellRestoreWrites({1, 2}, ScheduleGridColumn::OutboundStart, L"");
+    Check(cellUndo.size() == 1, "cell undo should allow restoring an empty editable text value");
+    Check(cellUndo[0].key == DataKey{2102, 1, 2, DataStyle::Raw}, "cell undo should target the edited schedule column");
+    Check(cellUndo[0].value.empty(), "cell undo should preserve the original empty text");
+
+    const ScheduleAddRequest request{1, 3, 777, L"ADDED-ITEM"};
+    const auto addUndo = BuildScheduleAddUndoWrites(request);
+    Check(addUndo.size() == 1, "add undo should emit one delete write");
+    Check(addUndo[0].key == DataKey{2105, 1, 3, DataStyle::Raw}, "add undo should target schedule delete id");
+    Check(addUndo[0].value == L"1", "add undo should use delete command value");
+
+    GridRow deletedRow;
+    deletedRow.binding = {1, 3};
+    deletedRow.cells = {
+        GridCell::Text(L"1"),
+        GridCell::Text(L"ADDED-ITEM", CellKind::Text),
+        GridCell::Text(L"2026/05/23 09:00", CellKind::Text),
+        GridCell::Text(L"2026/05/23 09:30", CellKind::Text),
+        GridCell::Text(L"777", CellKind::Spin),
+    };
+
+    const auto deleteUndo = BuildScheduleDeleteUndoWrites(deletedRow);
+    Check(deleteUndo.size() == 3, "delete undo should restore add payload and editable dates");
+    Check(deleteUndo[0].key == DataKey{2104, 1, 3, DataStyle::Raw}, "delete undo should target schedule add id");
+    Check(deleteUndo[0].value == EncodeScheduleAddValue(request), "delete undo should encode original order and item name");
+    Check(deleteUndo[1].key == DataKey{2102, 1, 3, DataStyle::Raw}, "delete undo should restore outbound start");
+    Check(deleteUndo[1].value == L"2026/05/23 09:00", "delete undo should preserve outbound start value");
+    Check(deleteUndo[2].key == DataKey{3000, 1, 3, DataStyle::Raw}, "delete undo should restore outbound end");
+    Check(deleteUndo[2].value == L"2026/05/23 09:30", "delete undo should preserve outbound end value");
+}
+
+/**
+ * @brief Verify in-cell schedule edits map only valid editable cells to schedule writes.
+ */
+void TestBuildScheduleCellEditWrites()
+{
+    const auto itemNameWrites = BuildScheduleCellEditWrites({1, 2}, ScheduleGridColumn::ItemName, CellKind::Text, L"UPDATED-ITEM");
+    Check(itemNameWrites.size() == 1, "schedule item-name edit should emit one write");
+    Check(itemNameWrites[0].key == DataKey{2100, 1, 2, DataStyle::Raw}, "schedule item-name edit should target 2100 raw key");
+    Check(itemNameWrites[0].value == L"UPDATED-ITEM", "schedule item-name edit should preserve edited value");
+
+    const auto startWrites = BuildScheduleCellEditWrites({1, 2}, ScheduleGridColumn::OutboundStart, CellKind::Text, L"2026/05/23 09:00");
+    Check(startWrites.size() == 1, "schedule outbound-start edit should emit one write");
+    Check(startWrites[0].key == DataKey{2102, 1, 2, DataStyle::Raw}, "schedule outbound-start edit should target 2102 raw key");
+
+    const auto endWrites = BuildScheduleCellEditWrites({1, 2}, ScheduleGridColumn::OutboundEnd, CellKind::Text, L"2026/05/23 09:30");
+    Check(endWrites.size() == 1, "schedule outbound-end edit should emit one write");
+    Check(endWrites[0].key == DataKey{3000, 1, 2, DataStyle::Raw}, "schedule outbound-end edit should target 3000 raw key");
+
+    const auto orderWrites = BuildScheduleCellEditWrites({1, 2}, ScheduleGridColumn::Order, CellKind::Spin, L"4321");
+    Check(orderWrites.size() == 1, "schedule order edit should emit one write");
+    Check(orderWrites[0].key == DataKey{2103, 1, 2, DataStyle::Raw}, "schedule order edit should target 2103 raw key");
+    Check(orderWrites[0].value == L"4321", "schedule order edit should preserve edited value");
+
+    Check(BuildScheduleCellEditWrites({1, 2}, ScheduleGridColumn::Container, CellKind::Text, L"2").empty(), "container column should not write");
+    Check(BuildScheduleCellEditWrites({0, 2}, ScheduleGridColumn::ItemName, CellKind::Text, L"UPDATED-ITEM").empty(), "invalid container binding should not write");
+    Check(BuildScheduleCellEditWrites({1, 0}, ScheduleGridColumn::ItemName, CellKind::Text, L"UPDATED-ITEM").empty(), "invalid item binding should not write");
+    Check(BuildScheduleCellEditWrites({1, 2}, ScheduleGridColumn::ItemName, CellKind::ReadOnlyText, L"UPDATED-ITEM").empty(), "read-only text cell should not write");
+    Check(BuildScheduleCellEditWrites({1, 2}, ScheduleGridColumn::ItemName, CellKind::Text, L"").empty(), "empty text edit should not write");
+    Check(BuildScheduleCellEditWrites({1, 2}, ScheduleGridColumn::Order, CellKind::Text, L"4321").empty(), "order text cell should not write");
+    Check(BuildScheduleCellEditWrites({1, 2}, ScheduleGridColumn::Order, CellKind::Spin, L"").empty(), "empty order should not write");
+    Check(BuildScheduleCellEditWrites({1, 2}, ScheduleGridColumn::Order, CellKind::Spin, L"bad").empty(), "non-numeric order should not write");
+    Check(BuildScheduleCellEditWrites({1, 2}, ScheduleGridColumn::Order, CellKind::Spin, L"0").empty(), "zero order should not write");
+    Check(BuildScheduleCellEditWrites({1, 2}, ScheduleGridColumn::Order, CellKind::Spin, L"10000").empty(), "order above V1 maximum should not write");
 }
 
 /**
@@ -1168,6 +1369,10 @@ void TestMaintenanceStatusModelShowsNormalRows()
     Check(model.rows[0].displayText == L"VALUE-0", "maintenance row should keep display text");
     Check(!model.rows[0].abnormal, "normal maintenance row should not be abnormal");
     Check(!model.rows[0].operationAvailable, "normal maintenance row should not expose operation");
+    Check(model.rows[0].supportHint.reason == MaintenanceAbnormalReason::None, "normal row should have no abnormal reason");
+    Check(model.rows[0].supportHint.priorityText == L"通常", "normal row should have normal priority");
+    Check(model.rows[0].supportHint.recommendedCheck.find(L"追加確認不要") != std::wstring::npos,
+          "normal row should not recommend extra checks");
 }
 
 /**
@@ -1194,6 +1399,17 @@ void TestMaintenanceStatusModelMarksAbnormalRows()
     Check(model.rows[4].abnormal && model.rows[4].displayText == L"異常検知", "abnormal text row should be abnormal");
     Check(model.rows[19].abnormal && model.rows[19].displayText == L"未取得", "missing critical value should become abnormal");
     Check(model.rows[19].operationAvailable, "abnormal row should expose operation availability");
+    Check(model.rows[1].supportHint.reason == MaintenanceAbnormalReason::ReadError, "read error should take highest abnormal reason priority");
+    Check(model.rows[1].supportHint.recommendedCheck.find(L"通信") != std::wstring::npos, "read error hint should mention communication");
+    Check(model.rows[1].supportHint.recommendedCheck.find(L"COM") != std::wstring::npos, "read error hint should mention COM");
+    Check(model.rows[1].supportHint.recommendedCheck.find(L"対象装置") != std::wstring::npos, "read error hint should mention target equipment");
+    Check(model.rows[2].supportHint.reason == MaintenanceAbnormalReason::Stale, "stale row should classify stale reason");
+    Check(model.rows[2].supportHint.recommendedCheck.find(L"最新値") != std::wstring::npos, "stale hint should mention latest value");
+    Check(model.rows[3].supportHint.reason == MaintenanceAbnormalReason::MissingValue, "empty value row should classify missing value");
+    Check(model.rows[3].supportHint.recommendedCheck.find(L"取得状態") != std::wstring::npos, "missing value hint should mention acquisition state");
+    Check(model.rows[4].supportHint.reason == MaintenanceAbnormalReason::AbnormalText, "abnormal text row should classify abnormal text");
+    Check(model.rows[4].supportHint.recommendedCheck.find(L"コンテナコントローラ") != std::wstring::npos,
+          "abnormal text hint should mention container controller");
 }
 
 /**
@@ -1209,15 +1425,23 @@ void TestMaintenanceDetailModelIncludesDiagnosticRows()
     row.stale = true;
     row.abnormal = true;
     row.operationAvailable = true;
+    row.supportHint = BuildMaintenanceSupportHint(row);
 
     const auto detail = BuildMaintenanceDetailModel(row);
     Check(detail.title == L"保守詳細: 重要情報 1001", "maintenance detail should include row name in title");
-    Check(detail.rows.size() >= 7, "maintenance detail should expose diagnostic rows");
+    Check(detail.rows.size() >= 11, "maintenance detail should expose diagnostic and support rows");
     Check(detail.rows[0].label == L"データID" && detail.rows[0].value == L"1001", "detail should include data id");
     Check(detail.rows[3].label == L"状態" && detail.rows[3].value == L"異常", "detail should include abnormal state");
     Check(detail.rows[4].label == L"エラー" && detail.rows[4].value == L"タイムアウト", "detail should include error text");
     Check(detail.rows[5].label == L"stale" && detail.rows[5].value == L"true", "detail should include stale flag");
     Check(detail.rows[6].label == L"操作可" && detail.rows[6].value == L"true", "detail should include operation availability");
+    Check(detail.rows[7].label == L"原因分類" && detail.rows[7].value.find(L"Read") != std::wstring::npos,
+          "detail should include support reason");
+    Check(detail.rows[8].label == L"確認優先度" && detail.rows[8].value == L"高", "detail should include support priority");
+    Check(detail.rows[9].label == L"推奨確認" && detail.rows[9].value.find(L"通信") != std::wstring::npos,
+          "detail should include recommended check");
+    Check(detail.rows[10].label == L"管理者メモ" && detail.rows[10].value.find(L"本画面から復旧Writeは行わない") != std::wstring::npos,
+          "detail should state that this screen does not write recovery commands");
 }
 
 } // namespace
@@ -1241,6 +1465,7 @@ int wmain()
         TestGatewayMarksErrorsAsStale,
         TestFunctionActionsReflectSelection,
         TestFunctionSlotFromVirtualKey,
+        TestNavigationModelBuildsDefaultCells,
         TestScheduleFunctionActionsExposeOrderChangeOnlyForSelection,
         TestSystemFunctionActionsReflectHistoryRunning,
         TestDefaultExternalAppsDefineContainerController,
@@ -1254,6 +1479,11 @@ int wmain()
         TestMockWriteUpdatesScheduleOrderReadback,
         TestMockScheduleAddAndDeleteReflectInGrid,
         TestBuildScheduleMoveUpWrites,
+        TestBuildScheduleRenumberWrites,
+        TestScheduleDuplicateOrderDetection,
+        TestScheduleUndoStack,
+        TestScheduleUndoWriteBuilders,
+        TestBuildScheduleCellEditWrites,
         TestHistoryRequestValidation,
         TestHistoryKeyGenerationUsesOutboundHistoryId,
         TestComputeNextPeriodicWakeKeepsNormalCadence,

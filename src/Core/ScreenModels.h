@@ -118,9 +118,20 @@ struct ContainerListLayoutModel
 };
 
 /**
- * @brief スケジュール順序入れ替えで発行するWrite要求。
+ * @brief スケジュールグリッドの列番号。
  */
-struct ScheduleOrderWrite
+namespace ScheduleGridColumn {
+inline constexpr int Container = 0;
+inline constexpr int ItemName = 1;
+inline constexpr int OutboundStart = 2;
+inline constexpr int OutboundEnd = 3;
+inline constexpr int Order = 4;
+} // namespace ScheduleGridColumn
+
+/**
+ * @brief スケジュールセル操作で発行するWrite要求。
+ */
+struct ScheduleCellWrite
 {
     DataKey key;
     std::wstring value;
@@ -170,6 +181,31 @@ struct ExternalLaunchResult
 };
 
 /**
+ * @brief 保守画面の異常原因分類。
+ */
+enum class MaintenanceAbnormalReason
+{
+    None,
+    ReadError,
+    Stale,
+    MissingValue,
+    AbnormalText,
+    Unknown,
+};
+
+/**
+ * @brief 保守画面の管理者判断支援表示。
+ */
+struct MaintenanceSupportHint
+{
+    MaintenanceAbnormalReason reason{MaintenanceAbnormalReason::None};
+    std::wstring reasonText;
+    std::wstring priorityText;
+    std::wstring recommendedCheck;
+    std::wstring operatorNote;
+};
+
+/**
  * @brief 保守画面の重要情報1行。
  */
 struct MaintenanceStatusRow
@@ -181,6 +217,7 @@ struct MaintenanceStatusRow
     bool stale{false};
     bool abnormal{false};
     bool operationAvailable{false};
+    MaintenanceSupportHint supportHint;
 };
 
 /**
@@ -227,7 +264,14 @@ ReadOnlyDetailModel BuildScheduleDetailModel(const DataGateway& gateway, GridRow
 /**
  * @brief 選択行を直前表示行へ繰り上げるための順序Writeを組み立てる。
  */
-std::vector<ScheduleOrderWrite> BuildScheduleMoveUpWrites(const GridModel& grid, int selectedRow);
+std::vector<ScheduleCellWrite> BuildScheduleMoveUpWrites(const GridModel& grid, int selectedRow);
+/**
+ * @brief スケジュール編集セルの確定値からWrite要求を組み立てる。
+ */
+std::vector<ScheduleCellWrite> BuildScheduleCellEditWrites(GridRowBinding binding,
+                                                           int column,
+                                                           CellKind kind,
+                                                           const std::wstring& value);
 /**
  * @brief システム画面V1の固定外部アプリ定義を返す。
  */
@@ -246,6 +290,10 @@ GridModel BuildMaintenanceGrid(const DataGateway& gateway);
  * @brief 更新スナップショットから保守画面向けの重要情報状態を構築する。
  */
 MaintenanceStatusModel BuildMaintenanceStatusModel(const DataCatalog& catalog, const UpdateSnapshot& snapshot);
+/**
+ * @brief 保守重要情報行から管理者判断支援表示を構築する。
+ */
+MaintenanceSupportHint BuildMaintenanceSupportHint(const MaintenanceStatusRow& row);
 /**
  * @brief 保守重要情報行から読み取り専用詳細モデルを構築する。
  */

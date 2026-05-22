@@ -12,9 +12,16 @@
 msbuild .\MFCApplication7.sln /m /p:Configuration=Debug /p:Platform=x64
 .\bin\x64\Debug\CoreTests.exe
 .\bin\x64\Debug\PerformanceTest.exe --duration-ms 3000
+.\bin\x64\Debug\PerformanceTest.exe --duration-ms 60000
+.\bin\x64\Debug\PerformanceTest.exe --duration-ms 3000 --max-load /Bridge:Mock /MockProfile:MaxLoad
+.\bin\x64\Debug\PerformanceTest.exe --duration-ms 3000 --max-load /Bridge:Mock /MockProfile:MaxLoad /MockHistoryReadDelayMs:1 /MockWriteDelayMs:1
 .\bin\x64\Debug\MFCApplication7.exe /SelfTest
 .\bin\x64\Debug\MFCApplication7.exe /SelfTest /WriteSmoke
 .\bin\x64\Debug\MFCApplication7.exe /SelfTest /HistorySmoke
+.\bin\x64\Debug\MFCApplication7.exe /SelfTest /GridEditSmoke /Bridge:Mock
+.\bin\x64\Debug\MFCApplication7.exe /SelfTest /DetailSmoke /Bridge:Mock
+.\bin\x64\Debug\MFCApplication7.exe /SelfTest /MaxLoadSmoke /Bridge:Mock /MockProfile:MaxLoad
+.\bin\x64\Debug\MFCApplication7.exe /SelfTest /ExternalLaunchSmoke /Bridge:Mock
 ```
 
 ## 確認観点
@@ -30,14 +37,17 @@ msbuild .\MFCApplication7.sln /m /p:Configuration=Debug /p:Platform=x64
 - 既定カタログと JSON カタログの定義件数、critical key 件数、style 許可。
 - 不正カタログ、不明 style の拒否。
 - BridgeFactory による mock bridge 作成。
+- BridgeFactory による mock 最大負荷プロファイルと遅延注入オプション解析。
 - MockBackendBridge の style 変換、無効 style 拒否。
+- MockBackendBridge の `MaxLoad` プロファイルによる100コンテナ/1000品目相当の生成。
 - DataGateway の stale/error 付与。
 - FunctionBarModel の画面別有効/無効。
-- GridModel の cell kind 保持。
+- GridModel の cell kind と combo/radio options 保持、グリッド編集値検証。
+- ContainerSummary の総品目数と表示品目数の分離、コンテナ詳細/スケジュール詳細モデル。
 - Schedule grid の row binding。
 - Write 後の readback。
 - 履歴要求 validation と key 生成。
-- UpdateCoordinator の Write メトリクス、ReadOnly エラー、履歴キャンセル、履歴500件上限、不正履歴要求拒否、履歴中 Write 応答性。
+- UpdateCoordinator の Write メトリクス、Write開始遅延最大値、100ms超過回数、ReadOnly エラー、履歴キャンセル、履歴500件上限、不正履歴要求拒否、履歴中 Write 応答性。
 - PrioritizedWorkQueue の優先度順序。
 - StationSnapshot の100コンテナ構築。
 
@@ -51,6 +61,12 @@ msbuild .\MFCApplication7.sln /m /p:Configuration=Debug /p:Platform=x64
 - Write 開始遅延が 0ms 以上 100ms 以下であること。
 - Write が完了し、結果が `Ok` であること。
 - 履歴取得が実行され、履歴エラーがないこと。
+
+`PerformanceTest --duration-ms 3000 --max-load /Bridge:Mock /MockProfile:MaxLoad /MockHistoryReadDelayMs:1 /MockWriteDelayMs:1` は、上記に加えて次を確認します。
+
+- mock最大負荷プロファイルでスケジュールグリッドが1000行相当を生成すること。
+- スケジュールグリッド再構築が実行され、最大所要時間が出力されること。
+- 連続Writeの `maxWriteStartDelayMs` が100ms以内で、`writeStartDelayExceededCount` が0であること。
 
 ### `/SelfTest`
 
@@ -75,24 +91,67 @@ msbuild .\MFCApplication7.sln /m /p:Configuration=Debug /p:Platform=x64
 - キャンセル後に履歴が停止すること。
 - 履歴キャンセル数、履歴 read 数、Write 開始遅延、critical cycle が期待を満たすこと。
 
+`/SelfTest /GridEditSmoke` は、カスタムグリッド編集UI基盤を追加で確認します。
+
+- 通常既定では `BeginEditCell()` が開始されないこと。
+- `Text`、`Spin`、`ComboBox`、`RadioButton`、`CheckBox` の編集確定が `GridModel` と `LastEditCommit()` に反映されること。
+- Esc キャンセルではセル値が変わらないこと。
+
+`/SelfTest /DetailSmoke` は、詳細ダイアログに渡す読み取り専用モデルを追加で確認します。
+
+- コンテナ詳細モデルが品目数、表示品目数、最大5件の品目詳細を持つこと。
+- コンテナなし選択では F1 詳細対象外になること。
+- スケジュール詳細モデルが binding から品目名、予定、順序、作業時間を読み直すこと。
+
+`/SelfTest /MaxLoadSmoke` は、最大負荷モックプロファイルを使って次を確認します。
+
+- `BuildScheduleGrid()` が1000行相当を生成すること。
+- 履歴取得、重要更新、通常更新、複数Writeが併走すること。
+- Write開始遅延最大値が100ms以内で、100ms超過回数が0であること。
+
+`/SelfTest /ExternalLaunchSmoke` は、Fake起動器を使って次を確認します。
+
+- 固定定義 `container-controller` が存在すること。
+- 初回起動成功がSystemグリッドへ「起動済み」として反映されること。
+- 二重起動抑止時も「起動済み」として反映されること。
+- 失敗注入時にSystemグリッドへ「起動失敗」と失敗メッセージが反映されること。
+
 ## 今回の実行結果
 
-実行日: 2026-05-21
+実行日: 2026-05-22
 
 | コマンド | 終了コード | 結果 | 代表出力/理由 |
 |---|---:|---|---|
-| `msbuild .\MFCApplication7.sln /m /p:Configuration=Debug /p:Platform=x64` | 1 | 実行不能 | `msbuild` が現在の PowerShell PATH に存在しないため、コマンドとして認識されなかった。 |
-| `.\bin\x64\Debug\CoreTests.exe` | 1 | 失敗 | `FAIL: write should start within 100ms` |
-| `.\bin\x64\Debug\PerformanceTest.exe --duration-ms 3000` | 1 | 失敗 | `criticalCycles=87`, `criticalDeadlineMisses=0`, `normalCycles=6`, `lastWriteStartDelayMs=83`, `writeCompletedCount=1`, `lastWriteErrorCode=0`, `historyReadCount=0`, `critical refresh cadence too slow` |
-| `.\bin\x64\Debug\MFCApplication7.exe /SelfTest` | 0 | 成功 | 標準出力なし。終了コード 0。 |
-| `.\bin\x64\Debug\MFCApplication7.exe /SelfTest /WriteSmoke` | 0 | 成功 | 標準出力なし。終了コード 0。 |
-| `.\bin\x64\Debug\MFCApplication7.exe /SelfTest /HistorySmoke` | 0 | 成功 | 標準出力なし。終了コード 0。 |
+| `MSBuild.exe MFCApplication7.sln /p:Configuration=Debug /p:Platform=x64 /m` | 0 | 成功 | `ビルドに成功しました。0 個の警告 0 エラー` |
+| `.\bin\x64\Debug\CoreTests.exe` | 0 | 成功 | `PASS: 51 core tests` |
+| `.\bin\x64\Debug\BackendBridgeMock.exe /SelfTest` | 0 | 成功 | 標準出力なし。終了コード 0。 |
+| `.\bin\x64\Debug\BackendBridgeMock.exe /ComSelfTest` | 0 | 成功 | 標準出力なし。終了コード 0。 |
+| `.\bin\x64\Debug\MFCApplication7.exe /SelfTest /Bridge:Mock` | 0 | 成功 | 標準出力なし。終了コード 0。 |
+| `.\bin\x64\Debug\MFCApplication7.exe /SelfTest /WriteSmoke /Bridge:Mock` | 0 | 成功 | 標準出力なし。終了コード 0。 |
+| `.\bin\x64\Debug\MFCApplication7.exe /SelfTest /HistorySmoke /Bridge:Mock` | 0 | 成功 | 標準出力なし。終了コード 0。 |
+| `.\bin\x64\Debug\MFCApplication7.exe /SelfTest /ScheduleMutationSmoke /Bridge:Mock` | 0 | 成功 | 標準出力なし。終了コード 0。 |
+| `.\bin\x64\Debug\MFCApplication7.exe /SelfTest /ScheduleOrderSmoke /Bridge:Mock` | 0 | 成功 | 標準出力なし。終了コード 0。 |
+| `.\bin\x64\Debug\MFCApplication7.exe /SelfTest /StatusSmoke /Bridge:Mock` | 0 | 成功 | 標準出力なし。終了コード 0。 |
+| `.\bin\x64\Debug\MFCApplication7.exe /SelfTest /StationLayoutSmoke /Bridge:Mock` | 0 | 成功 | 標準出力なし。終了コード 0。 |
+| `.\bin\x64\Debug\MFCApplication7.exe /SelfTest /ContainerListLayoutSmoke /Bridge:Mock` | 0 | 成功 | 標準出力なし。終了コード 0。 |
+| `.\bin\x64\Debug\MFCApplication7.exe /SelfTest /MaintenanceDetailSmoke /Bridge:Mock` | 0 | 成功 | 標準出力なし。終了コード 0。 |
+| `.\bin\x64\Debug\MFCApplication7.exe /SelfTest /DetailSmoke /Bridge:Mock` | 0 | 成功 | 標準出力なし。終了コード 0。 |
+| `.\bin\x64\Debug\MFCApplication7.exe /SelfTest /GridEditSmoke /Bridge:Mock` | 0 | 成功 | 標準出力なし。終了コード 0。 |
+| `.\bin\x64\Debug\MFCApplication7.exe /SelfTest /MaxLoadSmoke /Bridge:Mock /MockProfile:MaxLoad` | 0 | 成功 | 標準出力なし。終了コード 0。 |
+| `.\bin\x64\Debug\MFCApplication7.exe /SelfTest /ExternalLaunchSmoke /Bridge:Mock` | 0 | 成功 | 標準出力なし。終了コード 0。 |
+| `.\bin\x64\Debug\MFCApplication7.exe /SelfTest /ExternalLaunchSmoke /Bridge:Com /ProgId:MFCApplication7.BackendBridgeMock` | 0 | 成功 | HKCU登録後に実行し、最後に登録解除。終了コード 0。 |
+| `.\bin\x64\Debug\PerformanceTest.exe --duration-ms 3000` | 0 | 成功 | `criticalCycles=95`, `criticalDeadlineMisses=0`, `criticalMaxCycleMs=1`, `maxWriteStartDelayMs=0`, `historyReadCount=1900` |
+| `.\bin\x64\Debug\PerformanceTest.exe --duration-ms 60000` | 0 | 成功 | `criticalCycles=1823`, `criticalDeadlineMisses=0`, `criticalMaxCycleMs=15`, `criticalMaxSnapshotLockMs=0`, `maxWriteStartDelayMs=0`, `historyReadCount=3000`。 |
+| `.\bin\x64\Debug\PerformanceTest.exe --duration-ms 3000 --max-load /Bridge:Mock /MockProfile:MaxLoad` | 0 | 成功 | `criticalCycles=99`, `criticalDeadlineMisses=0`, `writeCompletedCount=12`, `scheduleGridLastRows=1000`, `scheduleGridMaxMs=115` |
+| `.\bin\x64\Debug\PerformanceTest.exe --duration-ms 3000 --max-load /Bridge:Mock /MockProfile:MaxLoad /MockHistoryReadDelayMs:1 /MockWriteDelayMs:1` | 1 | 失敗 | `criticalDeadlineMisses=1`, `scheduleGridLastRows=1000`, `scheduleGridMaxMs=563`, `writeStartDelayExceededCount=0`。 |
+| `.\bin\x64\Debug\PerformanceTest.exe --duration-ms 60000 --max-load /Bridge:Mock /MockProfile:MaxLoad /MockHistoryReadDelayMs:1 /MockWriteDelayMs:1` | 1 | 失敗 | 2回再実行して `criticalDeadlineMisses=1` / `4`。2回目は `scheduleGridMaxMs=4819`, `writeStartDelayExceededCount=0`。 |
+| `git diff --check` | 0 | 成功 | 空白エラーなし。改行コード変換警告のみ。 |
 
 ### 結果の扱い
 
-`msbuild` は Developer PowerShell または Visual Studio Build Tools の PATH 設定がないため実行できなかった。既存の `bin\x64\Debug` 配下のバイナリは実行可能だったため、テスト/スモークは既存ビルド成果物に対して実行した。
+MSBuild は Visual Studio 2022 の `MSBuild.exe` を直接指定して実行した。上記の標準検証と最大負荷mock検証は Debug x64 の再ビルド後バイナリに対する結果です。
 
-`CoreTests` と `PerformanceTest` は失敗しているため、この仕様書作成時点では「既存テストが全て成功している」とは記録しない。失敗は仕様書変更によるものではなく、実行時に観測された既存バイナリ/環境での結果として扱う。
+今回追加した critical no-catch-up scheduling により、通常 `PerformanceTest --duration-ms 60000` は `criticalDeadlineMisses=0` で成功しました。`criticalMaxCycleMs=1`、`criticalMaxSnapshotLockMs=0` で、Write 開始遅延、Write 結果、履歴エラーも正常です。一方、遅延注入付き max-load 性能ゲートは過去結果として critical deadline miss を記録しており、正式COMや遅延注入条件での長時間安定性は別途調査対象です。
 
 ## 標準検証範囲外
 
@@ -100,7 +159,7 @@ msbuild .\MFCApplication7.sln /m /p:Configuration=Debug /p:Platform=x64
 
 - 別部署提供予定の正式 COM アプリケーションとの接続。
 - 実バックエンド/実ネットワーク通信での応答性確認。
-- COM モックの HKCU 登録/解除を伴う環境依存確認。
+- 別部署提供の正式 COM サーバーの HKCU 登録/解除を伴う環境依存確認。COM モックは一部自己診断で確認済み。
 - MFC GUI の手動操作確認。
 - キーボード F1-F8 入力確認。
 

@@ -25,9 +25,18 @@
 | `/ProgId:<value>` | COM mode 時に使う ProgID を上書きする。既定値は `MFCApplication7.BackendBridgeMock`。 |
 | `/Ip:<value>` | 初期接続先 IP を上書きする。既定値は `127.0.0.1`。 |
 | `/Catalog:<path>` | データカタログ JSON のパスを上書きする。既定値は `config/data_catalog.json`。 |
+| `/MockProfile:MaxLoad` | mock mode 時に100コンテナ/1000品目相当の負荷プロファイルを使う。COM mode では無視される。 |
+| `/MockCriticalReadDelayMs:<N>` | mock mode の重要情報ReadにN msの遅延を注入する。 |
+| `/MockNormalReadDelayMs:<N>` | mock mode の通常/スケジュールReadにN msの遅延を注入する。 |
+| `/MockHistoryReadDelayMs:<N>` | mock mode の履歴ReadにN msの遅延を注入する。 |
+| `/MockWriteDelayMs:<N>` | mock mode のWriteにN msの遅延を注入する。 |
 | `/SelfTest` | GUI を開かず、自己診断を実行して `ExitProcess()` で終了する。 |
 | `/WriteSmoke` | `/SelfTest` と組み合わせると Write 経路スモークを実行する。 |
 | `/HistorySmoke` | `/SelfTest` と組み合わせると履歴取得スモークを実行する。 |
+| `/MaxLoadSmoke` | `/SelfTest` と組み合わせると最大負荷モックプロファイルで履歴、通常更新、重要更新、複数Writeの併走を確認する。 |
+| `/GridEditSmoke` | `/SelfTest` と組み合わせると `CCustomGridCtrl` の編集開始、確定、キャンセル、セル種別別UIを確認する。 |
+| `/DetailSmoke` | `/SelfTest` と組み合わせるとコンテナ詳細/スケジュール詳細モデルとコンテナなし除外を確認する。 |
+| `/ExternalLaunchSmoke` | `/SelfTest` と組み合わせるとFake起動器で外部アプリ起動、二重起動抑止、失敗表示を確認する。 |
 
 `/WriteSmoke` と `/HistorySmoke` は `RunSelfTest()` 内で順に判定されます。現行コードでは Write smoke が先に評価されるため、両方を同時指定した場合は Write smoke 側の戻り値が優先されます。
 

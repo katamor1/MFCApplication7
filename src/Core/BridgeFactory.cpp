@@ -3,6 +3,7 @@
 #include "ComBackendBridge.h"
 #include "MockBackendBridge.h"
 
+#include <algorithm>
 #include <cwctype>
 #include <stdexcept>
 #include <vector>
@@ -49,6 +50,19 @@ std::wstring OptionValue(const std::wstring& commandLine, const wchar_t* optionN
     return value;
 }
 
+int NonNegativeOptionValue(const std::wstring& commandLine, const wchar_t* optionName)
+{
+    const auto value = OptionValue(commandLine, optionName);
+    if (value.empty()) {
+        return 0;
+    }
+    try {
+        return std::max(0, std::stoi(value));
+    } catch (...) {
+        return 0;
+    }
+}
+
 } // namespace
 
 /**
@@ -74,7 +88,7 @@ std::shared_ptr<IBackendBridge> CreateBackendBridge(const BridgeFactoryOptions& 
     if (options.bridgeMode == BridgeMode::Com) {
         return std::make_shared<ComBackendBridge>(options.progId);
     }
-    return std::make_shared<MockBackendBridge>(catalog);
+    return std::make_shared<MockBackendBridge>(catalog, options.mockLoadProfile, options.mockLatencyOptions);
 }
 
 /**
@@ -105,6 +119,18 @@ BridgeFactoryOptions ParseBridgeFactoryOptions(const std::wstring& commandLine)
     if (!catalog.empty()) {
         options.catalogPath = catalog;
     }
+
+    const auto mockProfile = ToLower(OptionValue(commandLine, L"/MockProfile:"));
+    if (mockProfile == L"maxload" || mockProfile == L"max-load") {
+        options.mockLoadProfile = MockLoadProfile::MaxLoad;
+    } else if (mockProfile == L"default") {
+        options.mockLoadProfile = MockLoadProfile::Default;
+    }
+
+    options.mockLatencyOptions.criticalReadDelayMs = NonNegativeOptionValue(commandLine, L"/MockCriticalReadDelayMs:");
+    options.mockLatencyOptions.normalReadDelayMs = NonNegativeOptionValue(commandLine, L"/MockNormalReadDelayMs:");
+    options.mockLatencyOptions.historyReadDelayMs = NonNegativeOptionValue(commandLine, L"/MockHistoryReadDelayMs:");
+    options.mockLatencyOptions.writeDelayMs = NonNegativeOptionValue(commandLine, L"/MockWriteDelayMs:");
 
     return options;
 }

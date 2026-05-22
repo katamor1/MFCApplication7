@@ -81,10 +81,13 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="MFCApplication7App.h" />
+    <ClInclude Include="ContainerListCtrl.h" />
     <ClInclude Include="CustomGridCtrl.h" />
+    <ClInclude Include="ExternalProcessLauncher.h" />
     <ClInclude Include="HistoryRequestDialog.h" />
     <ClInclude Include="MainDialog.h" />
     <ClInclude Include="OrderEditDialog.h" />
+    <ClInclude Include="ReadOnlyDetailDialog.h" />
     <ClInclude Include="ScheduleAddDialog.h" />
     <ClInclude Include="ScheduleDeleteConfirmDialog.h" />
     <ClInclude Include="StationLayoutCtrl.h" />
@@ -92,10 +95,13 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="MFCApplication7App.cpp" />
+    <ClCompile Include="ContainerListCtrl.cpp" />
     <ClCompile Include="CustomGridCtrl.cpp" />
+    <ClCompile Include="ExternalProcessLauncher.cpp" />
     <ClCompile Include="HistoryRequestDialog.cpp" />
     <ClCompile Include="MainDialog.cpp" />
     <ClCompile Include="OrderEditDialog.cpp" />
+    <ClCompile Include="ReadOnlyDetailDialog.cpp" />
     <ClCompile Include="ScheduleAddDialog.cpp" />
     <ClCompile Include="ScheduleDeleteConfirmDialog.cpp" />
     <ClCompile Include="StationLayoutCtrl.cpp" />

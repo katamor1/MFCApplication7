@@ -122,6 +122,20 @@ void TestBridgeFactoryCreatesMockBridge()
 }
 
 /**
+ * @brief Verify mock load-profile and latency CLI options are parsed.
+ */
+void TestBridgeFactoryParsesMockLoadAndLatencyOptions()
+{
+    const auto options = ParseBridgeFactoryOptions(L"/Bridge:Mock /MockProfile:MaxLoad /MockCriticalReadDelayMs:1 /MockNormalReadDelayMs:2 /MockHistoryReadDelayMs:3 /MockWriteDelayMs:4");
+    Check(options.bridgeMode == BridgeMode::InProcessMock, "mock bridge option should keep in-process mode");
+    Check(options.mockLoadProfile == MockLoadProfile::MaxLoad, "mock profile should parse max-load profile");
+    Check(options.mockLatencyOptions.criticalReadDelayMs == 1, "critical delay should parse");
+    Check(options.mockLatencyOptions.normalReadDelayMs == 2, "normal delay should parse");
+    Check(options.mockLatencyOptions.historyReadDelayMs == 3, "history delay should parse");
+    Check(options.mockLatencyOptions.writeDelayMs == 4, "write delay should parse");
+}
+
+/**
  * @brief Verify mock reads format values and reject invalid style requests.
  */
 void TestMockBridgeFormatsValuesAndRejectsInvalidStyle()
@@ -141,6 +155,30 @@ void TestMockBridgeFormatsValuesAndRejectsInvalidStyle()
     Check(value.find(L"in") != std::wstring::npos, "inch style should append unit");
 
     Check(bridge.Read({1014, 0, 0, DataStyle::SecondsToHhMmSs}, value) == BridgeError::InvalidStyle, "invalid style should fail");
+}
+
+/**
+ * @brief Verify max-load mock profile exposes 100 containers and 1000 schedule items.
+ */
+void TestMockMaxLoadProfileBuildsThousandScheduleRows()
+{
+    auto catalog = DataCatalog::CreateDefault();
+    auto bridge = std::make_shared<MockBackendBridge>(catalog, MockLoadProfile::MaxLoad);
+    DataGateway gateway(bridge);
+    Check(gateway.Connect(L"127.0.0.1") == BridgeError::Ok, "gateway connect should succeed");
+
+    const auto missingContainerItemCount = gateway.Read({2003, 29, 0, DataStyle::Raw});
+    Check(missingContainerItemCount.errorCode == BridgeError::Ok, "max-load item count should read");
+    Check(missingContainerItemCount.displayText == L"10", "max-load should expose ten items even for default missing containers");
+
+    const auto station = BuildStationSnapshot(gateway, 29);
+    Check(station.containers.size() == 100, "max-load station should still expose 100 containers");
+    Check(!station.containers[28].missing, "max-load should not mark synthetic containers as missing");
+
+    const auto schedule = BuildScheduleGrid(gateway);
+    Check(schedule.RowCount() == 1000, "max-load schedule should expose 1000 item rows");
+    Check(schedule.Rows().front().binding.containerNo == 1 && schedule.Rows().front().binding.itemNo == 1,
+          "max-load schedule should keep container/item binding");
 }
 
 /**
@@ -222,15 +260,48 @@ void TestScheduleFunctionActionsExposeOrderChangeOnlyForSelection()
 void TestGridModelKeepsCellKinds()
 {
     GridModel grid;
-    grid.SetColumns({L"Name", L"Qty", L"Enabled"});
+    grid.SetColumns({L"Name", L"Qty", L"Mode", L"Enabled"});
     grid.AddRow({GridCell::Text(L"Item A", CellKind::ReadOnlyText),
                  GridCell::Text(L"3", CellKind::Spin),
+                 GridCell::Text(L"A", CellKind::ComboBox, {L"A", L"B"}),
                  GridCell::Text(L"true", CellKind::CheckBox)});
 
-    Check(grid.ColumnCount() == 3, "grid should keep column count");
+    Check(grid.ColumnCount() == 4, "grid should keep column count");
     Check(grid.RowCount() == 1, "grid should keep row count");
     Check(grid.Rows()[0].cells[1].kind == CellKind::Spin, "grid should preserve spin cell kind");
-    Check(grid.Rows()[0].cells[2].kind == CellKind::CheckBox, "grid should preserve checkbox cell kind");
+    Check(grid.Rows()[0].cells[2].kind == CellKind::ComboBox, "grid should preserve combo cell kind");
+    Check(grid.Rows()[0].cells[2].options.size() == 2, "grid should preserve combo options");
+    Check(grid.Rows()[0].cells[3].kind == CellKind::CheckBox, "grid should preserve checkbox cell kind");
+}
+
+/**
+ * @brief Verify cell kinds and values follow the grid edit policy.
+ */
+void TestGridEditPolicyValidatesCellKinds()
+{
+    Check(!IsEditableCellKind(CellKind::ReadOnlyText), "read-only text should not be editable");
+    Check(IsEditableCellKind(CellKind::Text), "text cells should be editable");
+    Check(IsEditableCellKind(CellKind::Spin), "spin cells should be editable");
+    Check(IsEditableCellKind(CellKind::ComboBox), "combo cells should be editable");
+    Check(IsEditableCellKind(CellKind::RadioButton), "radio cells should be editable");
+    Check(IsEditableCellKind(CellKind::CheckBox), "checkbox cells should be editable");
+
+    Check(ValidateGridEditValue(GridCell::Text(L"", CellKind::Text), L"").valid, "text should allow empty value");
+    Check(ValidateGridEditValue(GridCell::Text(L"1", CellKind::Spin), L"-12").valid, "spin should allow signed integer");
+    Check(!ValidateGridEditValue(GridCell::Text(L"1", CellKind::Spin), L"").valid, "spin should reject empty value");
+    Check(!ValidateGridEditValue(GridCell::Text(L"1", CellKind::Spin), L"12x").valid, "spin should reject non-integer value");
+
+    const auto combo = GridCell::Text(L"A", CellKind::ComboBox, {L"A", L"B"});
+    Check(ValidateGridEditValue(combo, L"B").valid, "combo should allow option value");
+    Check(!ValidateGridEditValue(combo, L"C").valid, "combo should reject value outside options");
+
+    const auto radio = GridCell::Text(L"R1", CellKind::RadioButton, {L"R1", L"R2"});
+    Check(ValidateGridEditValue(radio, L"R2").valid, "radio should allow option value");
+    Check(!ValidateGridEditValue(radio, L"R3").valid, "radio should reject value outside options");
+
+    Check(ValidateGridEditValue(GridCell::Text(L"false", CellKind::CheckBox), L"true").valid, "checkbox should allow true");
+    Check(ValidateGridEditValue(GridCell::Text(L"false", CellKind::CheckBox), L"false").valid, "checkbox should allow false");
+    Check(!ValidateGridEditValue(GridCell::Text(L"false", CellKind::CheckBox), L"yes").valid, "checkbox should reject other values");
 }
 
 /**
@@ -312,6 +383,19 @@ bool HasScheduleRow(const GridModel& grid, int containerNo, int itemNo, std::wst
             if (order != nullptr && row.cells.size() > 3) {
                 *order = row.cells[3].text;
             }
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * @brief Find one read-only detail row by label/value.
+ */
+bool HasDetailRow(const ReadOnlyDetailModel& detail, const std::wstring& label, const std::wstring& value)
+{
+    for (const auto& row : detail.rows) {
+        if (row.label == label && row.value == value) {
             return true;
         }
     }
@@ -444,17 +528,115 @@ void TestHistoryKeyGenerationUsesOutboundHistoryId()
 }
 
 /**
+ * @brief Verify on-time critical cycles keep the planned cadence.
+ */
+void TestComputeNextPeriodicWakeKeepsNormalCadence()
+{
+    using clock = std::chrono::steady_clock;
+    const auto base = clock::time_point{};
+    const auto next = ComputeNextPeriodicWake(base, base + std::chrono::milliseconds(10), std::chrono::milliseconds(33));
+    Check(next == base + std::chrono::milliseconds(33), "on-time critical cycle should keep the next scheduled tick");
+}
+
+/**
+ * @brief Verify overdue critical cycles do not run catch-up spins.
+ */
+void TestComputeNextPeriodicWakeSkipsCatchUpWhenOverdue()
+{
+    using clock = std::chrono::steady_clock;
+    const auto base = clock::time_point{};
+    const auto next = ComputeNextPeriodicWake(base, base + std::chrono::milliseconds(80), std::chrono::milliseconds(33));
+    Check(next == base + std::chrono::milliseconds(113), "overdue critical cycle should schedule from finish time instead of catching up");
+}
+
+/**
  * @brief Verify system function actions switch between start and cancel states.
  */
 void TestSystemFunctionActionsReflectHistoryRunning()
 {
-    const auto idle = BuildSystemFunctionActions(false);
+    const auto idle = BuildSystemFunctionActions(false, false);
     Check(idle[0].enabled && idle[0].id == L"history", "system F1 should start history while idle");
     Check(!idle[1].enabled, "system F2 should be disabled while idle");
+    Check(!idle[2].enabled, "system F3 should be disabled without external app selection");
 
-    const auto running = BuildSystemFunctionActions(true);
+    const auto launchable = BuildSystemFunctionActions(false, true);
+    Check(launchable[2].enabled && launchable[2].id == L"external-launch", "system F3 should launch selected external app");
+    Check(launchable[2].label == L"起動", "system F3 should use launch label");
+
+    const auto running = BuildSystemFunctionActions(true, true);
     Check(!running[0].enabled, "system F1 should be disabled while history is running");
     Check(running[1].enabled && running[1].id == L"history-cancel", "system F2 should cancel running history");
+    Check(running[2].enabled, "system F3 should stay enabled during history load");
+}
+
+/**
+ * @brief Verify the fixed V1 external app definition is exposed by Core.
+ */
+void TestDefaultExternalAppsDefineContainerController()
+{
+    const auto apps = BuildDefaultExternalAppDefinitions();
+    Check(apps.size() == 1, "V1 should define one external app");
+    Check(apps[0].id == L"container-controller", "container controller app id should be stable");
+    Check(apps[0].label == L"コンテナコントローラ", "container controller label should be Japanese operator text");
+    Check(apps[0].executablePath == L"ContainerController.exe", "container controller executable should be provisional exe name");
+    Check(apps[0].arguments.empty(), "container controller should not pass provisional arguments");
+    Check(apps[0].workingDirectory.empty(), "container controller should use current working directory by default");
+    Check(!apps[0].allowMultiple, "container controller should suppress duplicate launches by default");
+}
+
+/**
+ * @brief Verify the system grid binds the external app row for F3 launch.
+ */
+void TestSystemGridBindsExternalAppRow()
+{
+    UpdateSnapshot snapshot;
+    const auto apps = BuildDefaultExternalAppDefinitions();
+    const auto grid = BuildSystemGrid(snapshot, apps, nullptr);
+    Check(grid.ColumnCount() == 4, "system grid should expose four operator columns");
+    Check(grid.RowCount() >= 2, "system grid should include app row and history status row");
+    Check(grid.Rows()[0].binding.externalAppId == L"container-controller", "first system row should bind external app id");
+    Check(grid.Rows()[0].cells[0].text == L"外部アプリ", "external app row should show row type");
+    Check(grid.Rows()[0].cells[1].text == L"コンテナコントローラ", "external app row should show app label");
+    Check(grid.Rows()[0].cells[2].text == L"未起動", "external app row should default to not-started status");
+}
+
+/**
+ * @brief Verify launch results are reflected in the system grid row.
+ */
+void TestSystemGridShowsExternalLaunchResult()
+{
+    UpdateSnapshot snapshot;
+    const auto apps = BuildDefaultExternalAppDefinitions();
+
+    ExternalLaunchResult success{L"container-controller", true, false, 0, L"起動しました"};
+    auto grid = BuildSystemGrid(snapshot, apps, &success);
+    Check(grid.Rows()[0].cells[2].text == L"起動済み", "successful launch should show running status");
+    Check(grid.Rows()[0].cells[3].text.find(L"起動しました") != std::wstring::npos, "successful launch message should be shown");
+
+    ExternalLaunchResult duplicate{L"container-controller", true, true, 0, L"起動済み"};
+    grid = BuildSystemGrid(snapshot, apps, &duplicate);
+    Check(grid.Rows()[0].cells[2].text == L"起動済み", "duplicate launch should keep running status");
+    Check(grid.Rows()[0].cells[3].text.find(L"起動済み") != std::wstring::npos, "duplicate launch message should be shown");
+
+    ExternalLaunchResult failure{L"container-controller", false, false, 2, L"指定されたファイルが見つかりません。"};
+    grid = BuildSystemGrid(snapshot, apps, &failure);
+    Check(grid.Rows()[0].cells[2].text == L"起動失敗", "failed launch should show failure status");
+    Check(grid.Rows()[0].cells[3].text.find(L"指定されたファイル") != std::wstring::npos, "failed launch message should be shown");
+}
+
+/**
+ * @brief Verify maintenance details are enabled only for abnormal rows.
+ */
+void TestMaintenanceFunctionActionsReflectAbnormalSelection()
+{
+    const auto none = BuildMaintenanceFunctionActions(false);
+    Check(none.size() == 8, "maintenance actions should always expose 8 slots");
+    Check(!none[0].enabled, "maintenance details should be disabled without abnormal selection");
+
+    const auto abnormal = BuildMaintenanceFunctionActions(true);
+    Check(abnormal[0].enabled, "maintenance details should be enabled for abnormal selection");
+    Check(abnormal[0].id == L"maintenance-details", "maintenance details action should have a stable id");
+    Check(abnormal[0].label == L"詳細", "maintenance details should use details label");
 }
 
 /**
@@ -527,6 +709,57 @@ void TestUpdateCoordinatorRecordsScheduleMutationMetrics()
     Check(metrics.scheduleDeleteCompletedCount == 1, "schedule delete metric should count delete completions");
     Check(metrics.lastWriteErrorCode == BridgeError::InvalidSubDataId, "last invalid mutation should expose write error");
     Check(metrics.lastScheduleMutationErrorCode == BridgeError::InvalidSubDataId, "schedule mutation should retain last mutation error");
+}
+
+/**
+ * @brief Verify queued write start delays track max and exceeded-count metrics.
+ */
+void TestUpdateCoordinatorRecordsWriteDelayEnvelope()
+{
+    auto catalog = DataCatalog::CreateDefault();
+    MockLatencyOptions latency;
+    latency.writeDelayMs = 150;
+    auto bridge = std::make_shared<MockBackendBridge>(catalog, MockLoadProfile::Default, latency);
+    DataGateway gateway(bridge);
+    Check(gateway.Connect(L"127.0.0.1") == BridgeError::Ok, "gateway connect should succeed");
+
+    UpdateCoordinator coordinator(catalog, gateway);
+    coordinator.Start();
+    coordinator.RequestWrite({2103, 1, 1, DataStyle::Raw}, L"1111");
+    coordinator.RequestWrite({2103, 1, 2, DataStyle::Raw}, L"2222");
+    Check(WaitForWriteCount(coordinator, 2), "coordinator should complete delayed queued writes");
+    coordinator.Stop();
+
+    const auto metrics = coordinator.Metrics();
+    Check(metrics.writeCompletedCount == 2, "delayed writes should complete");
+    Check(metrics.maxWriteStartDelayMs >= 100, "second queued write should raise max start delay");
+    Check(metrics.writeStartDelayExceededCount >= 1, "queued write delay over 100ms should be counted");
+}
+
+/**
+ * @brief Verify critical timing metrics are recorded while background work runs.
+ */
+void TestCriticalTimingMetricsAreRecorded()
+{
+    auto catalog = DataCatalog::CreateDefault();
+    MockLatencyOptions latency;
+    latency.criticalReadDelayMs = 1;
+    auto bridge = std::make_shared<MockBackendBridge>(catalog, MockLoadProfile::Default, latency);
+    DataGateway gateway(bridge);
+    Check(gateway.Connect(L"127.0.0.1") == BridgeError::Ok, "gateway connect should succeed");
+
+    UpdateCoordinator coordinator(catalog, gateway);
+    coordinator.Start();
+    Check(coordinator.StartHistoryLoad({1}), "history should start");
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    coordinator.CancelHistoryLoad();
+    coordinator.Stop();
+
+    const auto metrics = coordinator.Metrics();
+    Check(metrics.criticalCycles > 0, "critical cycles should run");
+    Check(metrics.criticalLastCycleMs > 0, "last critical cycle time should be recorded");
+    Check(metrics.criticalMaxCycleMs >= metrics.criticalLastCycleMs, "max critical cycle should include last cycle");
+    Check(metrics.criticalMaxSnapshotLockMs >= 0, "snapshot lock metric should be recorded");
 }
 
 /**
@@ -660,7 +893,73 @@ void TestScreenSnapshotBuildsContainerSummary()
     const auto station = BuildStationSnapshot(gateway, 1);
     Check(station.containers.size() == 100, "station snapshot should include 100 containers");
     Check(station.selected.containerNo == 1, "selected container should match requested id");
+    Check(station.selected.itemCount == 2, "selected container should keep backend item count");
     Check(!station.selected.items.empty(), "selected container should expose items");
+}
+
+/**
+ * @brief Verify container summary keeps total item count separate from visible detail rows.
+ */
+void TestContainerSummarySeparatesItemCountAndVisibleItems()
+{
+    auto catalog = DataCatalog::CreateDefault();
+    auto bridge = std::make_shared<MockBackendBridge>(catalog);
+    DataGateway gateway(bridge);
+    Check(gateway.Connect(L"127.0.0.1") == BridgeError::Ok, "gateway connect should succeed");
+
+    const auto summary = BuildContainerSummary(gateway, 9, 5);
+    Check(summary.containerNo == 9, "summary should keep requested container number");
+    Check(summary.itemCount == 10, "summary should preserve total item count from dataId 2003");
+    Check(summary.items.size() == 5, "summary should cap visible items by maxItems");
+
+    const auto missing = BuildContainerSummary(gateway, 29, 5);
+    Check(missing.missing, "missing container should retain missing flag");
+    Check(missing.itemCount == 0, "missing container should report zero total items");
+    Check(missing.items.empty(), "missing container should not expose visible items");
+}
+
+/**
+ * @brief Verify container detail model exposes container and item fields.
+ */
+void TestContainerDetailModelIncludesContainerAndItems()
+{
+    auto catalog = DataCatalog::CreateDefault();
+    auto bridge = std::make_shared<MockBackendBridge>(catalog);
+    DataGateway gateway(bridge);
+    Check(gateway.Connect(L"127.0.0.1") == BridgeError::Ok, "gateway connect should succeed");
+
+    const auto detail = BuildContainerDetailModel(BuildContainerSummary(gateway, 9, 5));
+    Check(detail.title == L"コンテナ詳細: 9", "container detail title should include container number");
+    Check(HasDetailRow(detail, L"コンテナ番号", L"9"), "container detail should include number");
+    Check(HasDetailRow(detail, L"名称", L"CNT-9"), "container detail should include name");
+    Check(HasDetailRow(detail, L"状態", L"空"), "container detail should include state");
+    Check(HasDetailRow(detail, L"品目数", L"10"), "container detail should include total item count");
+    Check(HasDetailRow(detail, L"表示品目数", L"5"), "container detail should include visible item count");
+    Check(HasDetailRow(detail, L"品目1 名称", L"ITEM-9-1"), "container detail should include first item name");
+    Check(HasDetailRow(detail, L"品目1 出庫順序", L"91"), "container detail should include first item order");
+    Check(HasDetailRow(detail, L"品目1 作業時間", L"00:05:45"), "container detail should include first item work time");
+}
+
+/**
+ * @brief Verify schedule detail model reads schedule fields from binding.
+ */
+void TestScheduleDetailModelReadsBindingValues()
+{
+    auto catalog = DataCatalog::CreateDefault();
+    auto bridge = std::make_shared<MockBackendBridge>(catalog);
+    DataGateway gateway(bridge);
+    Check(gateway.Connect(L"127.0.0.1") == BridgeError::Ok, "gateway connect should succeed");
+
+    const auto detail = BuildScheduleDetailModel(gateway, {1, 1});
+    Check(detail.title == L"スケジュール詳細: コンテナ 1 / 品目 1", "schedule detail title should include binding");
+    Check(HasDetailRow(detail, L"コンテナ番号", L"1"), "schedule detail should include container number");
+    Check(HasDetailRow(detail, L"品目番号", L"1"), "schedule detail should include item number");
+    Check(HasDetailRow(detail, L"品目名", L"ITEM-1-1"), "schedule detail should include item name");
+    Check(HasDetailRow(detail, L"入庫日", L"2026/05/3"), "schedule detail should include inbound date");
+    Check(HasDetailRow(detail, L"出庫開始", L"2026/05/21 2:00"), "schedule detail should include outbound start");
+    Check(HasDetailRow(detail, L"出庫終了", L"2026/05/22 2:30"), "schedule detail should include outbound end");
+    Check(HasDetailRow(detail, L"出庫順序", L"11"), "schedule detail should include outbound order");
+    Check(HasDetailRow(detail, L"作業時間", L"00:05:45"), "schedule detail should include work time");
 }
 
 /**
@@ -705,6 +1004,56 @@ void TestStationLayoutModelUsesFixedFiveColumnPlacement()
     Check(last.containerNo == 100, "container 100 should be last cell");
     Check(last.column == 4 && last.row == 19, "container 100 should be column 4 row 19");
     Check(last.kind == StationLayoutKind::RightSemiCircle, "last column should be right semicircle");
+}
+
+/**
+ * @brief Verify container list layout maps 100 containers into row-major 3-column cells.
+ */
+void TestContainerListLayoutModelUsesThreeColumnRowMajorPlacement()
+{
+    StationSnapshot snapshot;
+    snapshot.containers.reserve(100);
+    for (int containerNo = 1; containerNo <= 100; ++containerNo) {
+        ContainerSummary container;
+        container.containerNo = containerNo;
+        container.containerName = L"CNT-" + std::to_wstring(containerNo);
+        container.state = containerNo == 29 ? L"コンテナなし" : L"空";
+        container.missing = container.state == L"コンテナなし";
+        snapshot.containers.push_back(container);
+    }
+
+    const auto layout = BuildContainerListLayoutModel(snapshot, 4);
+    Check(layout.columnCount == 3, "container list should use three columns");
+    Check(layout.rowCount == 34, "container list should use 34 rows for 100 containers");
+    Check(layout.cells.size() == 100, "container list should expose 100 cells");
+
+    const auto& first = layout.cells[0];
+    Check(first.containerNo == 1, "container 1 should be first cell");
+    Check(first.column == 0 && first.row == 0, "container 1 should be column 0 row 0");
+    Check(first.displayText == L"1", "cell display text should be container number");
+    Check(first.containerName == L"CNT-1", "cell should preserve container name");
+
+    const auto& second = layout.cells[1];
+    Check(second.containerNo == 2, "container 2 should be second cell");
+    Check(second.column == 1 && second.row == 0, "container 2 should be column 1 row 0");
+
+    const auto& third = layout.cells[2];
+    Check(third.containerNo == 3, "container 3 should be third cell");
+    Check(third.column == 2 && third.row == 0, "container 3 should be column 2 row 0");
+
+    const auto& fourth = layout.cells[3];
+    Check(fourth.containerNo == 4, "container 4 should start the second visual row");
+    Check(fourth.column == 0 && fourth.row == 1, "container 4 should be column 0 row 1");
+    Check(fourth.selected, "selected container should be marked");
+
+    const auto& missing = layout.cells[28];
+    Check(missing.containerNo == 29, "container 29 should be present");
+    Check(missing.missing, "container without state should be marked missing");
+    Check(missing.state == L"コンテナなし", "cell should preserve container state");
+
+    const auto& last = layout.cells[99];
+    Check(last.containerNo == 100, "container 100 should be last cell");
+    Check(last.column == 0 && last.row == 33, "container 100 should be column 0 row 33");
 }
 
 /**
@@ -800,6 +1149,77 @@ void TestStatusSummaryIncludesWriteAndHistoryDetails()
           "status summary should include history metrics and error code");
 }
 
+/**
+ * @brief Verify normal maintenance status values do not create abnormal rows.
+ */
+void TestMaintenanceStatusModelShowsNormalRows()
+{
+    const auto catalog = DataCatalog::LoadFromFile(L"config/data_catalog.json");
+    UpdateSnapshot snapshot;
+    for (size_t index = 0; index < catalog.CriticalKeys().size(); ++index) {
+        snapshot.criticalValues.push_back({L"VALUE-" + std::to_wstring(index), BridgeError::Ok, {}, false});
+    }
+
+    const auto model = BuildMaintenanceStatusModel(catalog, snapshot);
+    Check(model.rows.size() == 20, "maintenance model should expose all critical rows");
+    Check(model.abnormalCount == 0, "normal critical values should not count abnormal maintenance rows");
+    Check(model.rows[0].dataId == 1000, "first maintenance row should keep data id");
+    Check(model.rows[0].name == L"重要情報 1000", "maintenance row should use catalog name");
+    Check(model.rows[0].displayText == L"VALUE-0", "maintenance row should keep display text");
+    Check(!model.rows[0].abnormal, "normal maintenance row should not be abnormal");
+    Check(!model.rows[0].operationAvailable, "normal maintenance row should not expose operation");
+}
+
+/**
+ * @brief Verify maintenance status model marks error, stale, missing, and abnormal text rows.
+ */
+void TestMaintenanceStatusModelMarksAbnormalRows()
+{
+    const auto catalog = DataCatalog::LoadFromFile(L"config/data_catalog.json");
+    UpdateSnapshot snapshot;
+    for (size_t index = 0; index < catalog.CriticalKeys().size() - 1; ++index) {
+        snapshot.criticalValues.push_back({L"VALUE-" + std::to_wstring(index), BridgeError::Ok, {}, false});
+    }
+    snapshot.criticalValues[1] = {L"", BridgeError::Timeout, {}, true};
+    snapshot.criticalValues[2] = {L"STALE", BridgeError::Ok, {}, true};
+    snapshot.criticalValues[3] = {L"", BridgeError::Ok, {}, false};
+    snapshot.criticalValues[4] = {L"異常検知", BridgeError::Ok, {}, false};
+
+    const auto model = BuildMaintenanceStatusModel(catalog, snapshot);
+    Check(model.rows.size() == 20, "maintenance model should include missing critical rows");
+    Check(model.abnormalCount == 5, "error, stale, empty, abnormal text, and missing values should count abnormal");
+    Check(model.rows[1].abnormal && model.rows[1].errorCode == BridgeError::Timeout, "error row should be abnormal and keep error");
+    Check(model.rows[2].abnormal && model.rows[2].stale, "stale row should be abnormal");
+    Check(model.rows[3].abnormal && model.rows[3].displayText == L"未取得", "empty row should show missing value");
+    Check(model.rows[4].abnormal && model.rows[4].displayText == L"異常検知", "abnormal text row should be abnormal");
+    Check(model.rows[19].abnormal && model.rows[19].displayText == L"未取得", "missing critical value should become abnormal");
+    Check(model.rows[19].operationAvailable, "abnormal row should expose operation availability");
+}
+
+/**
+ * @brief Verify maintenance detail model preserves diagnostic fields.
+ */
+void TestMaintenanceDetailModelIncludesDiagnosticRows()
+{
+    MaintenanceStatusRow row;
+    row.dataId = 1001;
+    row.name = L"重要情報 1001";
+    row.displayText = L"";
+    row.errorCode = BridgeError::Timeout;
+    row.stale = true;
+    row.abnormal = true;
+    row.operationAvailable = true;
+
+    const auto detail = BuildMaintenanceDetailModel(row);
+    Check(detail.title == L"保守詳細: 重要情報 1001", "maintenance detail should include row name in title");
+    Check(detail.rows.size() >= 7, "maintenance detail should expose diagnostic rows");
+    Check(detail.rows[0].label == L"データID" && detail.rows[0].value == L"1001", "detail should include data id");
+    Check(detail.rows[3].label == L"状態" && detail.rows[3].value == L"異常", "detail should include abnormal state");
+    Check(detail.rows[4].label == L"エラー" && detail.rows[4].value == L"タイムアウト", "detail should include error text");
+    Check(detail.rows[5].label == L"stale" && detail.rows[5].value == L"true", "detail should include stale flag");
+    Check(detail.rows[6].label == L"操作可" && detail.rows[6].value == L"true", "detail should include operation availability");
+}
+
 } // namespace
 
 /**
@@ -815,13 +1235,20 @@ int wmain()
         TestCatalogRejectsInvalidJsonFile,
         TestCatalogRejectsUnknownStyleName,
         TestBridgeFactoryCreatesMockBridge,
+        TestBridgeFactoryParsesMockLoadAndLatencyOptions,
         TestMockBridgeFormatsValuesAndRejectsInvalidStyle,
+        TestMockMaxLoadProfileBuildsThousandScheduleRows,
         TestGatewayMarksErrorsAsStale,
         TestFunctionActionsReflectSelection,
         TestFunctionSlotFromVirtualKey,
         TestScheduleFunctionActionsExposeOrderChangeOnlyForSelection,
         TestSystemFunctionActionsReflectHistoryRunning,
+        TestDefaultExternalAppsDefineContainerController,
+        TestSystemGridBindsExternalAppRow,
+        TestSystemGridShowsExternalLaunchResult,
+        TestMaintenanceFunctionActionsReflectAbnormalSelection,
         TestGridModelKeepsCellKinds,
+        TestGridEditPolicyValidatesCellKinds,
         TestScheduleGridBindsRowsToContainerItems,
         TestScheduleGridSortsByOutboundOrder,
         TestMockWriteUpdatesScheduleOrderReadback,
@@ -829,19 +1256,30 @@ int wmain()
         TestBuildScheduleMoveUpWrites,
         TestHistoryRequestValidation,
         TestHistoryKeyGenerationUsesOutboundHistoryId,
+        TestComputeNextPeriodicWakeKeepsNormalCadence,
+        TestComputeNextPeriodicWakeSkipsCatchUpWhenOverdue,
         TestUpdateCoordinatorRecordsSuccessfulWriteMetrics,
         TestUpdateCoordinatorRecordsReadOnlyWriteError,
         TestUpdateCoordinatorRecordsScheduleMutationMetrics,
+        TestUpdateCoordinatorRecordsWriteDelayEnvelope,
+        TestCriticalTimingMetricsAreRecorded,
         TestUpdateCoordinatorCancelsHistoryLoad,
         TestUpdateCoordinatorCapsHistoryRecords,
         TestHistoryLoadRejectsInvalidRequestBeforeCommunication,
         TestHistoryLoadKeepsWritePriorityResponsive,
         TestPriorityQueueOrdersCriticalBeforeNormalAndHistory,
         TestScreenSnapshotBuildsContainerSummary,
+        TestContainerSummarySeparatesItemCountAndVisibleItems,
+        TestContainerDetailModelIncludesContainerAndItems,
+        TestScheduleDetailModelReadsBindingValues,
         TestStationLayoutModelUsesFixedFiveColumnPlacement,
+        TestContainerListLayoutModelUsesThreeColumnRowMajorPlacement,
         TestStatusSummaryShowsNormalCriticalState,
         TestStatusSummaryCountsCriticalErrorsAndMissingValues,
         TestStatusSummaryIncludesWriteAndHistoryDetails,
+        TestMaintenanceStatusModelShowsNormalRows,
+        TestMaintenanceStatusModelMarksAbnormalRows,
+        TestMaintenanceDetailModelIncludesDiagnosticRows,
     };
 
     try {

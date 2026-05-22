@@ -2,6 +2,7 @@
 
 #include "HistoryRequestDialog.h"
 #include "OrderEditDialog.h"
+#include "ReadOnlyDetailDialog.h"
 #include "ScheduleAddDialog.h"
 #include "ScheduleDeleteConfirmDialog.h"
 #include "StatusSummary.h"
@@ -92,6 +93,7 @@ BEGIN_MESSAGE_MAP(CMainDialog, CDialogEx)
     ON_BN_CLICKED(IDC_NAV_EXPAND, &CMainDialog::OnNavExpand)
     ON_NOTIFY(LVN_ITEMCHANGED, IDC_CONTENT_LIST, &CMainDialog::OnListItemChanged)
     ON_BN_CLICKED(IDC_STATION_LAYOUT, &CMainDialog::OnStationLayoutClicked)
+    ON_BN_CLICKED(IDC_CONTAINER_LIST_LAYOUT, &CMainDialog::OnContainerListLayoutClicked)
 END_MESSAGE_MAP()
 
 /**
@@ -102,6 +104,8 @@ CMainDialog::CMainDialog(BridgeFactoryOptions options)
     , catalog_(LoadConfiguredCatalogOrDefault(options.catalogPath))
     , bridgeOptions_(std::move(options))
     , bridge_(CreateBackendBridge(bridgeOptions_))
+    , externalApps_(BuildDefaultExternalAppDefinitions())
+    , processLauncher_(std::make_unique<Win32ExternalProcessLauncher>())
 {
 }
 
@@ -218,6 +222,10 @@ void CMainDialog::OnFunctionCommand(UINT id)
             RefreshUi(true);
             return;
         }
+        if (slot == 3) {
+            LaunchSelectedExternalApp();
+            return;
+        }
         return;
     }
 
@@ -246,10 +254,16 @@ void CMainDialog::OnFunctionCommand(UINT id)
         }
     }
 
+    if (currentScreen_ == MainScreenId::Maintenance) {
+        if (slot == 1) {
+            ShowMaintenanceDetails();
+            return;
+        }
+        return;
+    }
+
     if ((currentScreen_ == MainScreenId::Station || currentScreen_ == MainScreenId::ContainerList) && slot == 1) {
-        CString message;
-        message.Format(L"コンテナ %d の詳細表示を開きます。", selectedContainerNo_);
-        AfxMessageBox(message, MB_OK | MB_ICONINFORMATION);
+        ShowContainerDetails();
     }
 }
 
@@ -274,6 +288,13 @@ void CMainDialog::OnListItemChanged(NMHDR* notify, LRESULT* result)
             if (coordinator_) {
                 coordinator_->SetSelectedContainer(selectedContainerNo_);
             }
+        } else if (currentScreen_ == MainScreenId::Maintenance) {
+            selectedMaintenanceDataId_ = contentList_.RowBindingAt(change->iItem).dataId;
+            if (coordinator_) {
+                RefreshFunctions(coordinator_->Snapshot());
+            }
+        } else if (currentScreen_ == MainScreenId::System && coordinator_) {
+            RefreshFunctions(coordinator_->Snapshot());
         }
     }
     *result = 0;
@@ -292,6 +313,18 @@ void CMainDialog::OnStationLayoutClicked()
 }
 
 /**
+ * @brief Update selected container from container-list card click notification.
+ */
+void CMainDialog::OnContainerListLayoutClicked()
+{
+    selectedContainerNo_ = containerListLayout_.SelectedContainerNo();
+    if (coordinator_) {
+        coordinator_->SetSelectedContainer(selectedContainerNo_);
+    }
+    RefreshUi(true);
+}
+
+/**
  * @brief Create all UI controls and default labels for each screen group.
  */
 void CMainDialog::CreateControls()
@@ -301,6 +334,8 @@ void CMainDialog::CreateControls()
     detailText_.Create(L"", WS_CHILD | WS_VISIBLE | SS_LEFT | WS_BORDER, CRect(0, 0, 0, 0), this, IDC_DETAIL_TEXT);
     contentList_.Create(WS_CHILD | WS_VISIBLE | WS_BORDER | LVS_REPORT | LVS_SINGLESEL, CRect(0, 0, 0, 0), this, IDC_CONTENT_LIST);
     contentList_.SetExtendedStyle(LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
+    contentList_.SetEditingEnabled(false);
+    containerListLayout_.Create(WS_CHILD | WS_BORDER, CRect(0, 0, 0, 0), this, IDC_CONTAINER_LIST_LAYOUT);
     stationLayout_.Create(WS_CHILD | WS_BORDER, CRect(0, 0, 0, 0), this, IDC_STATION_LAYOUT);
 
     const std::array<const wchar_t*, 5> labels = {L"ST", L"LIST", L"SCH", L"SYS", L"MNT"};
@@ -350,10 +385,17 @@ void CMainDialog::LayoutControls()
     const int contentHeight = std::max(1, client.Height() - topHeight - bottomHeight - gap * 2);
     if (currentScreen_ == MainScreenId::Station) {
         contentList_.ShowWindow(SW_HIDE);
+        containerListLayout_.ShowWindow(SW_HIDE);
         stationLayout_.ShowWindow(SW_SHOW);
         stationLayout_.MoveWindow(contentLeft, contentTop, contentWidth, contentHeight);
+    } else if (currentScreen_ == MainScreenId::ContainerList) {
+        contentList_.ShowWindow(SW_HIDE);
+        stationLayout_.ShowWindow(SW_HIDE);
+        containerListLayout_.ShowWindow(SW_SHOW);
+        containerListLayout_.MoveWindow(contentLeft, contentTop, contentWidth, contentHeight);
     } else {
         stationLayout_.ShowWindow(SW_HIDE);
+        containerListLayout_.ShowWindow(SW_HIDE);
         contentList_.ShowWindow(SW_SHOW);
         contentList_.MoveWindow(contentLeft, contentTop, contentWidth, contentHeight);
     }
@@ -427,15 +469,16 @@ void CMainDialog::RefreshFunctions(const UpdateSnapshot& snapshot)
 {
     std::vector<FunctionAction> actions;
     if (currentScreen_ == MainScreenId::Station || currentScreen_ == MainScreenId::ContainerList) {
-        const bool missing = currentScreen_ == MainScreenId::Station
-                                 ? IsSelectedContainerMissing(snapshot.station, selectedContainerNo_)
-                                 : snapshot.station.selected.missing;
+        const bool missing = IsSelectedContainerMissing(snapshot.station, selectedContainerNo_);
         actions = BuildContainerFunctionActions(true, missing);
     } else if (currentScreen_ == MainScreenId::Schedule) {
         const bool hasSelection = contentList_.GetFirstSelectedItemPosition() != nullptr;
         actions = BuildScheduleFunctionActions(hasSelection, hasSelection && CanMoveScheduleSelectionUp());
     } else if (currentScreen_ == MainScreenId::System) {
-        actions = BuildSystemFunctionActions(snapshot.historyRunning);
+        actions = BuildSystemFunctionActions(snapshot.historyRunning, !SelectedExternalAppId().empty());
+    } else if (currentScreen_ == MainScreenId::Maintenance) {
+        const auto* selected = SelectedMaintenanceRow();
+        actions = BuildMaintenanceFunctionActions(selected != nullptr && selected->abnormal);
     } else {
         actions = BuildBlankFunctionActions();
     }
@@ -474,30 +517,30 @@ void CMainDialog::PopulateCurrentScreen(const UpdateSnapshot& snapshot)
         PopulateStation(snapshot.station);
         break;
     case MainScreenId::ContainerList:
-        PopulateGrid(BuildContainerListGrid(snapshot.station));
+        containerListLayout_.ApplyModel(BuildContainerListLayoutModel(snapshot.station, selectedContainerNo_));
         break;
     case MainScreenId::Schedule:
         PopulateGrid(BuildScheduleGrid(gateway));
         break;
     case MainScreenId::System: {
-        GridModel grid;
-        grid.SetColumns({L"日オフセット", L"番号", L"値", L"状態"});
-        std::wstring status = snapshot.historyStatusText.empty() ? L"待機" : snapshot.historyStatusText;
-        status += L" " + std::to_wstring(snapshot.historyProgress) + L"%";
-        grid.AddRow({GridCell::Text(L"状態"), GridCell::Text(L""), GridCell::Text(status), GridCell::Text(snapshot.historyRunning ? L"取得中" : L"待機")});
-        for (const auto& record : snapshot.historyRecords) {
-            grid.AddRow({
-                GridCell::Text(std::to_wstring(record.dayOffset)),
-                GridCell::Text(std::to_wstring(record.recordIndex)),
-                GridCell::Text(record.displayText),
-                GridCell::Text(record.stale ? ToDisplayText(record.errorCode) : L"OK"),
-            });
-        }
-        PopulateGrid(grid);
+        PopulateGrid(BuildSystemGrid(snapshot,
+                                     externalApps_,
+                                     hasExternalLaunchResult_ ? &lastExternalLaunchResult_ : nullptr));
         break;
     }
     case MainScreenId::Maintenance:
-        PopulateGrid(BuildMaintenanceGrid(gateway));
+        currentMaintenanceStatus_ = BuildMaintenanceStatusModel(catalog_, snapshot);
+        PopulateGrid(BuildMaintenanceStatusGrid(currentMaintenanceStatus_));
+        if (selectedMaintenanceDataId_ > 0) {
+            const auto& rows = contentList_.Model().Rows();
+            for (int row = 0; row < static_cast<int>(rows.size()); ++row) {
+                if (rows[static_cast<size_t>(row)].binding.dataId == selectedMaintenanceDataId_) {
+                    contentList_.SetItemState(row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+                    contentList_.EnsureVisible(row, FALSE);
+                    break;
+                }
+            }
+        }
         break;
     }
 }
@@ -539,7 +582,26 @@ void CMainDialog::PopulateStation(const StationSnapshot& snapshot)
 }
 
 /**
- * @brief Open detail message for selected schedule row.
+ * @brief Open read-only details for the selected container.
+ */
+void CMainDialog::ShowContainerDetails()
+{
+    if (selectedContainerNo_ <= 0 || !bridge_) {
+        return;
+    }
+
+    DataGateway gateway(bridge_);
+    const auto summary = BuildContainerSummary(gateway, selectedContainerNo_, 5);
+    if (summary.missing) {
+        return;
+    }
+
+    CReadOnlyDetailDialog dialog(BuildContainerDetailModel(summary), this);
+    dialog.DoModal();
+}
+
+/**
+ * @brief Open read-only details for selected schedule row.
  */
 void CMainDialog::ShowScheduleDetails(int row)
 {
@@ -552,9 +614,9 @@ void CMainDialog::ShowScheduleDetails(int row)
         return;
     }
 
-    CString message;
-    message.Format(L"コンテナ %d / 品目 %d の詳細表示を開きます。", binding.containerNo, binding.itemNo);
-    AfxMessageBox(message, MB_OK | MB_ICONINFORMATION);
+    DataGateway gateway(bridge_);
+    CReadOnlyDetailDialog dialog(BuildScheduleDetailModel(gateway, binding), this);
+    dialog.DoModal();
 }
 
 /**
@@ -598,6 +660,20 @@ void CMainDialog::MoveScheduleItemUp(int row)
     if (!writes.empty()) {
         RefreshUi(false);
     }
+}
+
+/**
+ * @brief Open read-only details for the selected abnormal maintenance row.
+ */
+void CMainDialog::ShowMaintenanceDetails()
+{
+    const auto* selected = SelectedMaintenanceRow();
+    if (selected == nullptr || !selected->abnormal) {
+        return;
+    }
+
+    CReadOnlyDetailDialog dialog(BuildMaintenanceDetailModel(*selected), this);
+    dialog.DoModal();
 }
 
 /**
@@ -645,6 +721,28 @@ void CMainDialog::DeleteScheduleItem(int row)
 }
 
 /**
+ * @brief Launch the selected system external app row through the process launcher boundary.
+ */
+void CMainDialog::LaunchSelectedExternalApp()
+{
+    const auto appId = SelectedExternalAppId();
+    if (appId.empty() || processLauncher_ == nullptr) {
+        return;
+    }
+
+    const auto found = std::find_if(externalApps_.begin(), externalApps_.end(), [&](const ExternalAppDefinition& app) {
+        return app.id == appId;
+    });
+    if (found == externalApps_.end()) {
+        return;
+    }
+
+    lastExternalLaunchResult_ = processLauncher_->Launch(*found);
+    hasExternalLaunchResult_ = true;
+    RefreshUi(true);
+}
+
+/**
  * @brief Check whether selected schedule row can swap with the previous visible row.
  */
 bool CMainDialog::CanMoveScheduleSelectionUp() const
@@ -655,6 +753,41 @@ bool CMainDialog::CanMoveScheduleSelectionUp() const
     }
     const int selectedRow = contentList_.GetNextSelectedItem(position);
     return !BuildScheduleMoveUpWrites(contentList_.Model(), selectedRow).empty();
+}
+
+/**
+ * @brief Return selected external app binding from the system grid.
+ */
+std::wstring CMainDialog::SelectedExternalAppId() const
+{
+    POSITION position = contentList_.GetFirstSelectedItemPosition();
+    if (position == nullptr) {
+        return {};
+    }
+    const int selectedRow = contentList_.GetNextSelectedItem(position);
+    if (selectedRow < 0) {
+        return {};
+    }
+    return contentList_.RowBindingAt(selectedRow).externalAppId;
+}
+
+/**
+ * @brief Return currently selected maintenance row, if it still exists.
+ */
+const MaintenanceStatusRow* CMainDialog::SelectedMaintenanceRow() const
+{
+    if (selectedMaintenanceDataId_ <= 0) {
+        return nullptr;
+    }
+    const auto found = std::find_if(currentMaintenanceStatus_.rows.begin(),
+                                   currentMaintenanceStatus_.rows.end(),
+                                   [this](const MaintenanceStatusRow& row) {
+                                       return row.dataId == selectedMaintenanceDataId_;
+                                   });
+    if (found == currentMaintenanceStatus_.rows.end()) {
+        return nullptr;
+    }
+    return &*found;
 }
 
 /**

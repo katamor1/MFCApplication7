@@ -1,9 +1,11 @@
 #pragma once
 
+#include "ExternalProcessLauncher.h"
 #include "DataCatalog.h"
 #include "DataGateway.h"
 #include "FunctionBarModel.h"
 #include "CustomGridCtrl.h"
+#include "ContainerListCtrl.h"
 #include "StationLayoutCtrl.h"
 #include "BridgeFactory.h"
 #include "ScreenModels.h"
@@ -16,6 +18,7 @@
 
 #include <array>
 #include <memory>
+#include <vector>
 
 enum class MainScreenId
 {
@@ -86,6 +89,10 @@ protected:
      * @brief ステーション配置図クリック時に selectedContainerNo_ を更新する。
      */
     afx_msg void OnStationLayoutClicked();
+    /**
+     * @brief コンテナ一覧カードクリック時に selectedContainerNo_ を更新する。
+     */
+    afx_msg void OnContainerListLayoutClicked();
 
     DECLARE_MESSAGE_MAP()
 
@@ -131,6 +138,10 @@ private:
      */
     void PopulateStation(const StationSnapshot& snapshot);
     /**
+     * @brief 選択中コンテナの詳細を読み取り専用で表示する。
+     */
+    void ShowContainerDetails();
+    /**
      * @brief スケジュール行の詳細閲覧操作。
      */
     void ShowScheduleDetails(int row);
@@ -143,6 +154,10 @@ private:
      */
     void MoveScheduleItemUp(int row);
     /**
+     * @brief 選択中の保守異常行の詳細を読み取り専用で表示する。
+     */
+    void ShowMaintenanceDetails();
+    /**
      * @brief 出庫予定追加を要求する。
      */
     void AddScheduleItem();
@@ -151,9 +166,21 @@ private:
      */
     void DeleteScheduleItem(int row);
     /**
+     * @brief 選択中の外部アプリ行を起動する。
+     */
+    void LaunchSelectedExternalApp();
+    /**
      * @brief 現在のスケジュール選択が繰上げ可能か判定する。
      */
     bool CanMoveScheduleSelectionUp() const;
+    /**
+     * @brief システム画面で選択中の外部アプリIDを取得する。
+     */
+    std::wstring SelectedExternalAppId() const;
+    /**
+     * @brief 現在選択中の保守行を取得する。
+     */
+    const MaintenanceStatusRow* SelectedMaintenanceRow() const;
     /**
      * @brief 現在画面の表示名を取得する。
      */
@@ -163,19 +190,26 @@ private:
     BridgeFactoryOptions bridgeOptions_;
     std::shared_ptr<IBackendBridge> bridge_;
     std::unique_ptr<UpdateCoordinator> coordinator_;
+    std::vector<ExternalAppDefinition> externalApps_;
+    std::unique_ptr<IExternalProcessLauncher> processLauncher_;
+    ExternalLaunchResult lastExternalLaunchResult_;
+    bool hasExternalLaunchResult_{false};
 
     CStatic statusText_;
     CProgressCtrl historyProgress_;
     CStatic detailText_;
     CCustomGridCtrl contentList_;
+    CContainerListCtrl containerListLayout_;
     CStationLayoutCtrl stationLayout_;
     CButton expandButton_;
     std::array<CButton, 5> navButtons_;
     std::array<CButton, 8> functionButtons_;
 
+    MaintenanceStatusModel currentMaintenanceStatus_;
     MainScreenId currentScreen_{MainScreenId::Station};
     bool navExpanded_{false};
     int selectedContainerNo_{1};
+    int selectedMaintenanceDataId_{0};
     int lastSeenWriteCompletedCount_{0};
     unsigned int timerTicks_{0};
 };

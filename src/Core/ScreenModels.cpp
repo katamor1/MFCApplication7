@@ -1,5 +1,7 @@
 #include "ScreenModels.h"
 
+#include "UpdateScheduler.h"
+
 #include <algorithm>
 
 /**
@@ -67,6 +69,66 @@ StationLayoutKind LayoutKindForColumn(int column) noexcept
     }
 }
 
+/**
+ * @brief Resolve display name for maintenance row from catalog metadata.
+ */
+std::wstring MaintenanceName(const DataCatalog& catalog, int dataId)
+{
+    const auto* definition = catalog.FindDefinition(dataId);
+    if (definition != nullptr && !definition->name.empty()) {
+        return definition->name;
+    }
+    return L"重要情報 " + std::to_wstring(dataId);
+}
+
+/**
+ * @brief Determine whether a critical value should be surfaced as maintenance abnormal.
+ */
+bool IsMaintenanceAbnormal(const MaintenanceStatusRow& row)
+{
+    return row.errorCode != BridgeError::Ok ||
+        row.stale ||
+        row.displayText.empty() ||
+        row.displayText == L"未取得" ||
+        row.displayText.find(L"異常") != std::wstring::npos;
+}
+
+/**
+ * @brief Return true when a launch result belongs to the requested app.
+ */
+bool MatchesLaunchResult(const ExternalLaunchResult* result, const std::wstring& appId)
+{
+    return result != nullptr && result->appId == appId;
+}
+
+/**
+ * @brief Convert a launch result into the system grid status text.
+ */
+std::wstring ExternalLaunchStatus(const ExternalAppDefinition& app, const ExternalLaunchResult* result)
+{
+    if (!MatchesLaunchResult(result, app.id)) {
+        return L"未起動";
+    }
+    if (result->success || result->alreadyRunning) {
+        return L"起動済み";
+    }
+    return L"起動失敗";
+}
+
+/**
+ * @brief Convert a launch result into the system grid detail text.
+ */
+std::wstring ExternalLaunchDetail(const ExternalAppDefinition& app, const ExternalLaunchResult* result)
+{
+    if (!MatchesLaunchResult(result, app.id)) {
+        return app.executablePath;
+    }
+    if (result->message.empty()) {
+        return result->success ? L"起動しました" : L"起動失敗";
+    }
+    return result->message;
+}
+
 } // namespace
 
 /**
@@ -81,6 +143,7 @@ ContainerSummary BuildContainerSummary(const DataGateway& gateway, int container
     summary.missing = summary.state == L"コンテナなし";
 
     const int itemCount = ToInt(ReadText(gateway, {2003, containerNo, 0, DataStyle::Raw}));
+    summary.itemCount = std::max(itemCount, 0);
     const int visibleItems = std::min(std::max(itemCount, 0), maxItems);
     for (int itemNo = 1; itemNo <= visibleItems; ++itemNo) {
         summary.items.push_back({
@@ -151,6 +214,35 @@ StationLayoutModel BuildStationLayoutModel(const StationSnapshot& snapshot, int 
 }
 
 /**
+ * @brief Build row-major 3-column container list layout from station snapshot.
+ */
+ContainerListLayoutModel BuildContainerListLayoutModel(const StationSnapshot& snapshot, int selectedContainerNo)
+{
+    constexpr int kColumnCount = 3;
+
+    ContainerListLayoutModel layout;
+    layout.columnCount = kColumnCount;
+    layout.rowCount = static_cast<int>((snapshot.containers.size() + kColumnCount - 1) / kColumnCount);
+    layout.cells.reserve(snapshot.containers.size());
+
+    for (size_t index = 0; index < snapshot.containers.size(); ++index) {
+        const auto& container = snapshot.containers[index];
+        ContainerListCell cell;
+        cell.containerNo = container.containerNo;
+        cell.column = static_cast<int>(index % kColumnCount);
+        cell.row = static_cast<int>(index / kColumnCount);
+        cell.displayText = std::to_wstring(container.containerNo);
+        cell.containerName = container.containerName;
+        cell.state = container.state;
+        cell.missing = container.missing;
+        cell.selected = container.containerNo == selectedContainerNo;
+        layout.cells.push_back(std::move(cell));
+    }
+
+    return layout;
+}
+
+/**
  * @brief Build simplified container list grid for station/list screens.
  */
 GridModel BuildContainerListGrid(const StationSnapshot& snapshot)
@@ -165,6 +257,33 @@ GridModel BuildContainerListGrid(const StationSnapshot& snapshot)
         });
     }
     return grid;
+}
+
+/**
+ * @brief Build read-only detail rows for one container.
+ */
+ReadOnlyDetailModel BuildContainerDetailModel(const ContainerSummary& summary)
+{
+    ReadOnlyDetailModel detail;
+    detail.title = L"コンテナ詳細: " + std::to_wstring(summary.containerNo);
+    detail.rows = {
+        {L"コンテナ番号", std::to_wstring(summary.containerNo)},
+        {L"名称", summary.containerName},
+        {L"状態", summary.state},
+        {L"品目数", std::to_wstring(summary.itemCount)},
+        {L"表示品目数", std::to_wstring(summary.items.size())},
+    };
+
+    for (size_t index = 0; index < summary.items.size(); ++index) {
+        const auto& item = summary.items[index];
+        const std::wstring prefix = L"品目" + std::to_wstring(index + 1) + L" ";
+        detail.rows.push_back({prefix + L"名称", item.itemName});
+        detail.rows.push_back({prefix + L"入庫日", item.inboundDate});
+        detail.rows.push_back({prefix + L"出庫開始", item.outboundStart});
+        detail.rows.push_back({prefix + L"出庫順序", item.outboundOrder});
+        detail.rows.push_back({prefix + L"作業時間", item.workTime});
+    }
+    return detail;
 }
 
 /**
@@ -219,6 +338,27 @@ GridModel BuildScheduleGrid(const DataGateway& gateway)
 }
 
 /**
+ * @brief Build read-only detail rows for one schedule row binding.
+ */
+ReadOnlyDetailModel BuildScheduleDetailModel(const DataGateway& gateway, GridRowBinding binding)
+{
+    ReadOnlyDetailModel detail;
+    detail.title = L"スケジュール詳細: コンテナ " + std::to_wstring(binding.containerNo) +
+        L" / 品目 " + std::to_wstring(binding.itemNo);
+    detail.rows = {
+        {L"コンテナ番号", std::to_wstring(binding.containerNo)},
+        {L"品目番号", std::to_wstring(binding.itemNo)},
+        {L"品目名", ReadText(gateway, {2100, binding.containerNo, binding.itemNo, DataStyle::Raw})},
+        {L"入庫日", ReadText(gateway, {2101, binding.containerNo, binding.itemNo, DataStyle::Raw})},
+        {L"出庫開始", ReadText(gateway, {2102, binding.containerNo, binding.itemNo, DataStyle::Raw})},
+        {L"出庫終了", ReadText(gateway, {3000, binding.containerNo, binding.itemNo, DataStyle::Raw})},
+        {L"出庫順序", ReadText(gateway, {2103, binding.containerNo, binding.itemNo, DataStyle::Raw})},
+        {L"作業時間", ReadText(gateway, {2106, binding.containerNo, binding.itemNo, DataStyle::SecondsToHhMmSs})},
+    };
+    return detail;
+}
+
+/**
  * @brief Build the two order writes needed to swap selected row with previous visible row.
  */
 std::vector<ScheduleOrderWrite> BuildScheduleMoveUpWrites(const GridModel& grid, int selectedRow)
@@ -249,6 +389,56 @@ std::vector<ScheduleOrderWrite> BuildScheduleMoveUpWrites(const GridModel& grid,
 }
 
 /**
+ * @brief Build V1 fixed external app definitions for the system screen.
+ */
+std::vector<ExternalAppDefinition> BuildDefaultExternalAppDefinitions()
+{
+    return {
+        {L"container-controller", L"コンテナコントローラ", L"ContainerController.exe", L"", L"", false},
+    };
+}
+
+/**
+ * @brief Build system screen rows for external launch state and history state.
+ */
+GridModel BuildSystemGrid(const UpdateSnapshot& snapshot,
+                          const std::vector<ExternalAppDefinition>& externalApps,
+                          const ExternalLaunchResult* lastLaunchResult)
+{
+    GridModel grid;
+    grid.SetColumns({L"種別", L"名称", L"状態", L"詳細"});
+
+    for (const auto& app : externalApps) {
+        grid.AddRow({
+            GridCell::Text(L"外部アプリ"),
+            GridCell::Text(app.label),
+            GridCell::Text(ExternalLaunchStatus(app, lastLaunchResult)),
+            GridCell::Text(ExternalLaunchDetail(app, lastLaunchResult)),
+        }, {0, 0, 0, app.id});
+    }
+
+    std::wstring status = snapshot.historyStatusText.empty() ? L"待機" : snapshot.historyStatusText;
+    status += L" " + std::to_wstring(snapshot.historyProgress) + L"%";
+    grid.AddRow({
+        GridCell::Text(L"履歴"),
+        GridCell::Text(L"出庫履歴"),
+        GridCell::Text(snapshot.historyRunning ? L"取得中" : L"待機"),
+        GridCell::Text(status),
+    });
+
+    for (const auto& record : snapshot.historyRecords) {
+        grid.AddRow({
+            GridCell::Text(L"履歴"),
+            GridCell::Text(L"日" + std::to_wstring(record.dayOffset) + L" #" + std::to_wstring(record.recordIndex)),
+            GridCell::Text(record.stale ? ToDisplayText(record.errorCode) : L"OK"),
+            GridCell::Text(record.displayText),
+        });
+    }
+
+    return grid;
+}
+
+/**
  * @brief Build maintenance screen rows from fixed definition range.
  */
 GridModel BuildMaintenanceGrid(const DataGateway& gateway)
@@ -261,6 +451,80 @@ GridModel BuildMaintenanceGrid(const DataGateway& gateway)
             GridCell::Text(ReadText(gateway, {dataId, 0, 0, DataStyle::Raw})),
             GridCell::Text(L"false", CellKind::CheckBox),
         });
+    }
+    return grid;
+}
+
+/**
+ * @brief Build maintenance critical status rows from latest update snapshot.
+ */
+MaintenanceStatusModel BuildMaintenanceStatusModel(const DataCatalog& catalog, const UpdateSnapshot& snapshot)
+{
+    MaintenanceStatusModel model;
+    const auto& keys = catalog.CriticalKeys();
+    model.rows.reserve(keys.size());
+
+    for (size_t index = 0; index < keys.size(); ++index) {
+        MaintenanceStatusRow row;
+        row.dataId = keys[index].dataId;
+        row.name = MaintenanceName(catalog, row.dataId);
+
+        if (index < snapshot.criticalValues.size()) {
+            const auto& value = snapshot.criticalValues[index];
+            row.displayText = value.displayText.empty() ? L"未取得" : value.displayText;
+            row.errorCode = value.errorCode;
+            row.stale = value.stale || value.errorCode != BridgeError::Ok || value.displayText.empty();
+        } else {
+            row.displayText = L"未取得";
+            row.errorCode = BridgeError::InternalError;
+            row.stale = true;
+        }
+
+        row.abnormal = IsMaintenanceAbnormal(row);
+        row.operationAvailable = row.abnormal;
+        if (row.abnormal) {
+            ++model.abnormalCount;
+        }
+        model.rows.push_back(std::move(row));
+    }
+
+    return model;
+}
+
+/**
+ * @brief Build read-only detail rows for one maintenance status row.
+ */
+ReadOnlyDetailModel BuildMaintenanceDetailModel(const MaintenanceStatusRow& row)
+{
+    ReadOnlyDetailModel detail;
+    detail.title = L"保守詳細: " + row.name;
+    detail.rows = {
+        {L"データID", std::to_wstring(row.dataId)},
+        {L"名称", row.name},
+        {L"値", row.displayText.empty() ? L"未取得" : row.displayText},
+        {L"状態", row.abnormal ? L"異常" : L"正常"},
+        {L"エラー", ToDisplayText(row.errorCode)},
+        {L"stale", row.stale ? L"true" : L"false"},
+        {L"操作可", row.operationAvailable ? L"true" : L"false"},
+    };
+    return detail;
+}
+
+/**
+ * @brief Build maintenance grid from maintenance status model.
+ */
+GridModel BuildMaintenanceStatusGrid(const MaintenanceStatusModel& model)
+{
+    GridModel grid;
+    grid.SetColumns({L"ID", L"項目", L"値", L"状態", L"操作可"});
+    for (const auto& row : model.rows) {
+        grid.AddRow({
+            GridCell::Text(std::to_wstring(row.dataId)),
+            GridCell::Text(row.name),
+            GridCell::Text(row.displayText),
+            GridCell::Text(row.abnormal ? L"異常" : L"正常"),
+            GridCell::Text(row.operationAvailable ? L"true" : L"false", CellKind::CheckBox),
+        }, {0, 0, row.dataId});
     }
     return grid;
 }

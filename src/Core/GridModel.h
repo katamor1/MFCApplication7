@@ -23,12 +23,34 @@ struct GridCell
 {
     std::wstring text;
     CellKind kind{CellKind::ReadOnlyText};
+    std::vector<std::wstring> options;
 
     /**
-     * @brief 文字列と種類を指定してセルを構築する。
+     * @brief 文字列、種類、候補を指定してセルを構築する。
      */
-    static GridCell Text(std::wstring value, CellKind kind = CellKind::ReadOnlyText);
+    static GridCell Text(std::wstring value,
+                         CellKind kind = CellKind::ReadOnlyText,
+                         std::vector<std::wstring> options = {});
 };
+
+/**
+ * @brief グリッド編集値の検証結果。
+ */
+struct GridEditValidationResult
+{
+    bool valid{false};
+    std::wstring message;
+};
+
+/**
+ * @brief セル種別が編集対象かを返す。
+ */
+bool IsEditableCellKind(CellKind kind) noexcept;
+
+/**
+ * @brief セル種別と候補に従って入力値を検証する。
+ */
+GridEditValidationResult ValidateGridEditValue(const GridCell& cell, const std::wstring& value);
 
 /**
  * @brief グリッド行が参照している対象行情報。
@@ -37,6 +59,8 @@ struct GridRowBinding
 {
     int containerNo{};
     int itemNo{};
+    int dataId{};
+    std::wstring externalAppId;
 };
 
 /**
@@ -64,6 +88,8 @@ public:
     void AddRow(std::vector<GridCell> cells, GridRowBinding binding);
     /** 全行を破棄する。 */
     void ClearRows();
+    /** 指定セルの表示文字列を更新する。 */
+    bool SetCellText(int row, int column, std::wstring value);
 
     /** 列数を返す。 */
     size_t ColumnCount() const noexcept;

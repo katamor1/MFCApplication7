@@ -28,11 +28,18 @@
 1. 次回起床時刻 `next` を持つ。
 2. `catalog_.CriticalKeys()` の全キーを `gateway_.ReadMany()` で順次読む。
 3. `snapshotMutex_` をロックし、`snapshot_.criticalValues` を更新する。
-4. `criticalCycles_` を増やす。
-5. 処理時間が33msを超えた場合は `criticalDeadlineMisses_` を増やす。
-6. `next += 33ms` として `sleep_until(next)` する。
+4. critical cycle 全体時間と snapshot 反映区間を metrics に記録する。
+5. `criticalCycles_` を増やす。
+6. 処理時間が33msを超えた場合は `criticalDeadlineMisses_` を増やす。
+7. 次回起床時刻は `ComputeNextPeriodicWake()` で計算する。通常は前回予定時刻 + 33ms だが、処理完了時刻が予定時刻を過ぎている場合は、完了時刻 + 33ms へリセットし、過去時刻への catch-up スピンを行わない。
 
 `ReadMany()` 自体は入力順に `Read()` を繰り返す単純な同期処理です。通信が遅い場合は critical ループの処理時間が延び、deadline miss として記録されます。
+
+critical 更新の主な metrics は次の通りです。
+
+- `criticalLastCycleMs`: 直近 critical cycle の処理時間。
+- `criticalMaxCycleMs`: 起動後に観測した critical cycle 処理時間の最大値。
+- `criticalMaxSnapshotLockMs`: critical 値を snapshot へ反映する区間の最大値。
 
 ## 通常更新スレッド
 
@@ -64,9 +71,10 @@ Write は `RequestWrite()` によりキューへ投入されます。
 2. 停止済みかつキュー空なら return する。
 3. キュー先頭の Write 要求を取り出す。
 4. 現在時刻と投入時刻の差を `lastWriteStartDelayMs_` に記録する。
-5. `gateway_.Write(key, value)` を実行する。
-6. 結果を `lastWriteErrorCode_` に記録する。
-7. `writeCompletedCount_` を増やす。
+5. 同じ遅延値で `maxWriteStartDelayMs_` を最大値更新し、100ms超過なら `writeStartDelayExceededCount_` を増やす。
+6. `gateway_.Write(key, value)` を実行する。
+7. 結果を `lastWriteErrorCode_` に記録する。
+8. `writeCompletedCount_` を増やす。
 
 現行の Write キューは FIFO です。`PrioritizedWorkQueue` という優先度付きキュー型も存在しますが、実際の `UpdateCoordinator` の Write 処理では `std::queue<WriteRequest>` が使われています。`PrioritizedWorkQueue` は CoreTests で優先度順序の仕様が検証されています。
 
@@ -132,5 +140,6 @@ COM mode の場合、critical、normal、write、history の各スレッドが `
 - ユーザー Write は条件変数で即時に起こす専用スレッドに分ける。
 - 履歴取得は要求時だけ別スレッドで動かし、10件ごとに snapshot 反映と短い sleep を入れる。
 - UI はワーカースレッドの完了を待たず、snapshot コピーだけを読む。
+- `PerformanceTest --max-load` では mock 最大負荷プロファイル、履歴取得、スケジュールグリッド再構築、連続Writeを併走させ、Write開始遅延の最大値と100ms超過回数を確認する。
 
 ただし、現行検証は主にモック環境です。実 COM サーバーや実ネットワークで同じ応答性を満たすかは、外部依存のため未確認です。

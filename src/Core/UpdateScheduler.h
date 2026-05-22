@@ -5,6 +5,7 @@
 #include "ScreenModels.h"
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <queue>
@@ -96,6 +97,11 @@ DataKey MakeHistoryKey(int dayOffset, int recordIndex) noexcept;
 bool IsValidScheduleAddRequest(const ScheduleAddRequest& request) noexcept;
 /** @brief 出庫予定追加Write用の値を組み立てる。 */
 std::wstring EncodeScheduleAddValue(const ScheduleAddRequest& request);
+/** @brief 前回予定時刻と処理完了時刻から次回周期起床時刻を計算する。 */
+std::chrono::steady_clock::time_point ComputeNextPeriodicWake(
+    std::chrono::steady_clock::time_point previousNext,
+    std::chrono::steady_clock::time_point finished,
+    std::chrono::milliseconds period) noexcept;
 
 /**
  * @brief UI が1回の再描画で参照する状態スナップショット。
@@ -115,8 +121,13 @@ struct SchedulerMetrics
 {
     int criticalCycles{};
     int criticalDeadlineMisses{};
+    long long criticalLastCycleMs{};
+    long long criticalMaxCycleMs{};
+    long long criticalMaxSnapshotLockMs{};
     int normalCycles{};
     long long lastWriteStartDelayMs{-1};
+    long long maxWriteStartDelayMs{-1};
+    int writeStartDelayExceededCount{};
     int writeCompletedCount{};
     BridgeError lastWriteErrorCode{BridgeError::Ok};
     int scheduleOrderWriteCompletedCount{};
@@ -210,11 +221,16 @@ private:
     std::atomic<int> selectedContainerNo_{1};
     std::atomic<int> criticalCycles_{0};
     std::atomic<int> criticalDeadlineMisses_{0};
+    std::atomic<long long> criticalLastCycleMs_{0};
+    std::atomic<long long> criticalMaxCycleMs_{0};
+    std::atomic<long long> criticalMaxSnapshotLockMs_{0};
     std::atomic<int> normalCycles_{0};
     std::atomic<int> historyProgress_{0};
     std::atomic<bool> historyRunning_{false};
     std::atomic<bool> historyCancelRequested_{false};
     std::atomic<long long> lastWriteStartDelayMs_{-1};
+    std::atomic<long long> maxWriteStartDelayMs_{-1};
+    std::atomic<int> writeStartDelayExceededCount_{0};
     std::atomic<int> writeCompletedCount_{0};
     std::atomic<int> lastWriteErrorCode_{static_cast<int>(BridgeError::Ok)};
     std::atomic<int> scheduleOrderWriteCompletedCount_{0};

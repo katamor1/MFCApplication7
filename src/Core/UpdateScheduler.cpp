@@ -21,6 +21,13 @@ constexpr size_t kHistorySnapshotLimit = 500;
 constexpr size_t kHistoryBatchSize = 10;
 constexpr int kConsecutiveHistoryErrorLimit = 50;
 
+void StoreMax(std::atomic<long long>& target, long long value) noexcept
+{
+    auto current = target.load();
+    while (value > current && !target.compare_exchange_weak(current, value)) {
+    }
+}
+
 } // namespace
 
 void PrioritizedWorkQueue::Push(WorkItem item)
@@ -99,6 +106,21 @@ bool IsValidScheduleAddRequest(const ScheduleAddRequest& request) noexcept
 std::wstring EncodeScheduleAddValue(const ScheduleAddRequest& request)
 {
     return std::to_wstring(request.order) + L"\t" + request.itemName;
+}
+
+/**
+ * @brief Compute the next periodic wake without catching up against past ticks.
+ */
+std::chrono::steady_clock::time_point ComputeNextPeriodicWake(
+    std::chrono::steady_clock::time_point previousNext,
+    std::chrono::steady_clock::time_point finished,
+    std::chrono::milliseconds period) noexcept
+{
+    const auto scheduled = previousNext + period;
+    if (scheduled <= finished) {
+        return finished + period;
+    }
+    return scheduled;
 }
 
 /**
@@ -258,8 +280,13 @@ SchedulerMetrics UpdateCoordinator::Metrics() const noexcept
     SchedulerMetrics metrics;
     metrics.criticalCycles = criticalCycles_.load();
     metrics.criticalDeadlineMisses = criticalDeadlineMisses_.load();
+    metrics.criticalLastCycleMs = criticalLastCycleMs_.load();
+    metrics.criticalMaxCycleMs = criticalMaxCycleMs_.load();
+    metrics.criticalMaxSnapshotLockMs = criticalMaxSnapshotLockMs_.load();
     metrics.normalCycles = normalCycles_.load();
     metrics.lastWriteStartDelayMs = lastWriteStartDelayMs_.load();
+    metrics.maxWriteStartDelayMs = maxWriteStartDelayMs_.load();
+    metrics.writeStartDelayExceededCount = writeStartDelayExceededCount_.load();
     metrics.writeCompletedCount = writeCompletedCount_.load();
     metrics.lastWriteErrorCode = static_cast<BridgeError>(lastWriteErrorCode_.load());
     metrics.scheduleOrderWriteCompletedCount = scheduleOrderWriteCompletedCount_.load();
@@ -282,19 +309,27 @@ void UpdateCoordinator::CriticalLoop()
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
 #endif
     using namespace std::chrono;
+    constexpr auto period = milliseconds(33);
     auto next = steady_clock::now();
     while (running_) {
         const auto started = steady_clock::now();
         const auto values = gateway_.ReadMany(catalog_.CriticalKeys());
+        const auto beforeSnapshotLock = steady_clock::now();
         {
             std::lock_guard<std::mutex> lock(snapshotMutex_);
             snapshot_.criticalValues = values;
         }
+        const auto finished = steady_clock::now();
+        const auto cycleMs = duration_cast<milliseconds>(finished - started).count();
+        const auto snapshotLockMs = duration_cast<milliseconds>(finished - beforeSnapshotLock).count();
+        criticalLastCycleMs_ = cycleMs;
+        StoreMax(criticalMaxCycleMs_, cycleMs);
+        StoreMax(criticalMaxSnapshotLockMs_, snapshotLockMs);
         ++criticalCycles_;
-        if (duration_cast<milliseconds>(steady_clock::now() - started).count() > 33) {
+        if (cycleMs > period.count()) {
             ++criticalDeadlineMisses_;
         }
-        next += milliseconds(33);
+        next = ComputeNextPeriodicWake(next, finished, period);
         std::this_thread::sleep_until(next);
     }
 }
@@ -338,6 +373,10 @@ void UpdateCoordinator::WriteLoop()
 
         const auto delay = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - request.enqueuedAt).count();
         lastWriteStartDelayMs_ = delay;
+        StoreMax(maxWriteStartDelayMs_, delay);
+        if (delay > 100) {
+            ++writeStartDelayExceededCount_;
+        }
         const auto error = gateway_.Write(request.key, request.value);
         lastWriteErrorCode_ = static_cast<int>(error);
         if (request.key.dataId == 2103) {

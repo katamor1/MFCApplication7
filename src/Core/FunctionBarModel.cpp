@@ -75,11 +75,24 @@ int FunctionSlotFromVirtualKey(int virtualKey) noexcept
 /**
  * @brief Build function bar actions for system screen.
  * @param historyRunning Whether history read is running.
+ * @param hasLaunchableSelection Whether an external app row is selected.
  */
-std::vector<FunctionAction> BuildSystemFunctionActions(bool historyRunning)
+std::vector<FunctionAction> BuildSystemFunctionActions(bool historyRunning, bool hasLaunchableSelection)
 {
     auto actions = EightSlots();
     actions[0] = {1, L"history", historyRunning ? L"取得中" : L"履歴取得", !historyRunning};
     actions[1] = {2, L"history-cancel", L"中断", historyRunning};
+    actions[2] = {3, L"external-launch", L"起動", hasLaunchableSelection};
+    return actions;
+}
+
+/**
+ * @brief Build function bar actions for maintenance screen.
+ * @param abnormalSelection Whether the current row represents an abnormal critical item.
+ */
+std::vector<FunctionAction> BuildMaintenanceFunctionActions(bool abnormalSelection)
+{
+    auto actions = EightSlots();
+    actions[0] = {1, L"maintenance-details", L"詳細", abnormalSelection};
     return actions;
 }

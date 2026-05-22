@@ -1,6 +1,45 @@
 #include "GridModel.h"
 
+#include <algorithm>
+#include <cwctype>
 #include <utility>
+
+namespace {
+
+/**
+ * @brief Return true when the string is a non-empty signed integer literal.
+ */
+bool IsIntegerLiteral(const std::wstring& value)
+{
+    if (value.empty()) {
+        return false;
+    }
+
+    size_t index = 0;
+    if (value[0] == L'+' || value[0] == L'-') {
+        if (value.size() == 1) {
+            return false;
+        }
+        index = 1;
+    }
+
+    for (; index < value.size(); ++index) {
+        if (!std::iswdigit(value[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * @brief Return true when the candidate is present in the cell option list.
+ */
+bool HasOption(const GridCell& cell, const std::wstring& value)
+{
+    return std::find(cell.options.begin(), cell.options.end(), value) != cell.options.end();
+}
+
+} // namespace
 
 /**
  * @file GridModel.cpp
@@ -11,11 +50,42 @@
  * @brief Create a text cell value with explicit kind.
  * @param value Cell text.
  * @param kind Kind for rendering/editability.
+ * @param options Optional candidate values for combo/radio cells.
  * @return Constructed GridCell.
  */
-GridCell GridCell::Text(std::wstring value, CellKind kind)
+GridCell GridCell::Text(std::wstring value, CellKind kind, std::vector<std::wstring> options)
 {
-    return {std::move(value), kind};
+    return {std::move(value), kind, std::move(options)};
+}
+
+/**
+ * @brief Return whether a cell kind is editable by the custom grid.
+ */
+bool IsEditableCellKind(CellKind kind) noexcept
+{
+    return kind != CellKind::ReadOnlyText;
+}
+
+/**
+ * @brief Validate one edit value according to the cell kind.
+ */
+GridEditValidationResult ValidateGridEditValue(const GridCell& cell, const std::wstring& value)
+{
+    switch (cell.kind) {
+    case CellKind::ReadOnlyText:
+        return {false, L"read-only cell"};
+    case CellKind::Text:
+        return {true, {}};
+    case CellKind::Spin:
+        return {IsIntegerLiteral(value), IsIntegerLiteral(value) ? std::wstring{} : L"integer required"};
+    case CellKind::ComboBox:
+        return {HasOption(cell, value), HasOption(cell, value) ? std::wstring{} : L"option required"};
+    case CellKind::RadioButton:
+        return {HasOption(cell, value), HasOption(cell, value) ? std::wstring{} : L"option required"};
+    case CellKind::CheckBox:
+        return {value == L"true" || value == L"false", (value == L"true" || value == L"false") ? std::wstring{} : L"true/false required"};
+    }
+    return {false, L"unknown cell kind"};
 }
 
 /**
@@ -52,6 +122,22 @@ void GridModel::AddRow(std::vector<GridCell> cells, GridRowBinding binding)
 void GridModel::ClearRows()
 {
     rows_.clear();
+}
+
+/**
+ * @brief Update one cell text when an in-place edit is committed.
+ */
+bool GridModel::SetCellText(int row, int column, std::wstring value)
+{
+    if (row < 0 || column < 0 || row >= static_cast<int>(rows_.size())) {
+        return false;
+    }
+    auto& cells = rows_[row].cells;
+    if (column >= static_cast<int>(cells.size())) {
+        return false;
+    }
+    cells[column].text = std::move(value);
+    return true;
 }
 
 /**

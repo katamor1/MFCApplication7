@@ -41,4 +41,9 @@ int FunctionSlotFromVirtualKey(int virtualKey) noexcept;
 /**
  * @brief システム画面用アクションを構築する。
  */
-std::vector<FunctionAction> BuildSystemFunctionActions(bool historyRunning);
+std::vector<FunctionAction> BuildSystemFunctionActions(bool historyRunning, bool hasLaunchableSelection);
+
+/**
+ * @brief 保守画面用アクションを構築する。
+ */
+std::vector<FunctionAction> BuildMaintenanceFunctionActions(bool abnormalSelection);

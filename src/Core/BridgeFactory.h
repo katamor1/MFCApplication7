@@ -2,6 +2,7 @@
 
 #include "BackendBridge.h"
 #include "DataCatalog.h"
+#include "MockBackendBridge.h"
 
 #include <memory>
 #include <string>
@@ -24,6 +25,10 @@ struct BridgeFactoryOptions
     std::wstring ipAddress{L"127.0.0.1"};
     /** @brief データカタログ JSON のパス。 */
     std::wstring catalogPath{L"config/data_catalog.json"};
+    /** @brief インプロセスモックの負荷プロファイル。 */
+    MockLoadProfile mockLoadProfile{MockLoadProfile::Default};
+    /** @brief インプロセスモックの遅延注入設定。 */
+    MockLatencyOptions mockLatencyOptions;
 };
 
 /**

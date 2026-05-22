@@ -1,7 +1,9 @@
 #include "MockBackendBridge.h"
 
+#include <chrono>
 #include <iomanip>
 #include <sstream>
+#include <thread>
 
 namespace {
 
@@ -122,8 +124,10 @@ bool TryDecodeScheduleAddValue(const std::wstring& value, int& order, std::wstri
 /**
  * @brief Construct bridge with catalog constraints used during validation.
  */
-MockBackendBridge::MockBackendBridge(DataCatalog catalog)
+MockBackendBridge::MockBackendBridge(DataCatalog catalog, MockLoadProfile loadProfile, MockLatencyOptions latencyOptions)
     : catalog_(std::move(catalog))
+    , loadProfile_(loadProfile)
+    , latencyOptions_(latencyOptions)
 {
 }
 
@@ -152,6 +156,8 @@ BridgeError MockBackendBridge::Read(const DataKey& key, std::wstring& value)
         value.clear();
         return validation;
     }
+
+    ApplyReadDelay(key);
 
     std::wstring rawValue;
     bool hasOverride = false;
@@ -197,6 +203,8 @@ BridgeError MockBackendBridge::Write(const DataKey& key, const std::wstring& val
         return BridgeError::ReadOnly;
     }
 
+    ApplyWriteDelay();
+
     std::lock_guard<std::mutex> lock(overridesMutex_);
     if (key.dataId == 2104) {
         int order = 0;
@@ -211,7 +219,7 @@ BridgeError MockBackendBridge::Write(const DataKey& key, const std::wstring& val
         overrides_[itemNameKey] = itemName;
         overrides_[orderKey] = std::to_wstring(order);
         const auto itemCount = overrides_.find(itemCountKey);
-        const int currentCount = itemCount == overrides_.end() ? ItemCount(key.subId1) : static_cast<int>(ParseInteger(itemCount->second));
+        const int currentCount = itemCount == overrides_.end() ? SyntheticItemCount(key.subId1) : static_cast<int>(ParseInteger(itemCount->second));
         if (key.subId2 > currentCount) {
             overrides_[itemCountKey] = std::to_wstring(key.subId2);
         }
@@ -257,9 +265,9 @@ std::wstring MockBackendBridge::RawValue(const DataKey& key) const
     case 2001:
         return L"CNT-" + FormatThousands(containerNo).substr(FormatThousands(containerNo).find_last_of(L",") + 1);
     case 2002:
-        return ContainerState(containerNo);
+        return loadProfile_ == MockLoadProfile::MaxLoad ? L"空" : ContainerState(containerNo);
     case 2003:
-        return std::to_wstring(ItemCount(containerNo));
+        return std::to_wstring(SyntheticItemCount(containerNo));
     case 2100:
         return L"ITEM-" + std::to_wstring(containerNo) + L"-" + std::to_wstring(key.subId2);
     case 2101:
@@ -300,4 +308,39 @@ std::wstring MockBackendBridge::FormatValue(const std::wstring& rawValue, DataSt
     default:
         return rawValue;
     }
+}
+
+/**
+ * @brief Apply configured latency for the read target category.
+ */
+void MockBackendBridge::ApplyReadDelay(const DataKey& key) const
+{
+    int delayMs = latencyOptions_.normalReadDelayMs;
+    if (key.dataId >= 1000 && key.dataId < 1020) {
+        delayMs = latencyOptions_.criticalReadDelayMs;
+    } else if (key.dataId == 4000) {
+        delayMs = latencyOptions_.historyReadDelayMs;
+    }
+
+    if (delayMs > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+    }
+}
+
+/**
+ * @brief Apply configured write latency.
+ */
+void MockBackendBridge::ApplyWriteDelay() const
+{
+    if (latencyOptions_.writeDelayMs > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(latencyOptions_.writeDelayMs));
+    }
+}
+
+/**
+ * @brief Return synthetic item count for current load profile.
+ */
+int MockBackendBridge::SyntheticItemCount(int containerNo) const
+{
+    return loadProfile_ == MockLoadProfile::MaxLoad ? 10 : ItemCount(containerNo);
 }

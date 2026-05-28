@@ -1,6 +1,7 @@
 #include "ExternalProcessLauncher.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <utility>
 #include <windows.h>
 
@@ -38,6 +39,22 @@ std::wstring BuildCommandLine(const ExternalAppDefinition& app)
     return command;
 }
 
+std::wstring ModulePath()
+{
+    std::wstring path(MAX_PATH, L'\0');
+    for (;;) {
+        const auto length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+        if (length == 0) {
+            return {};
+        }
+        if (length < path.size()) {
+            path.resize(length);
+            return path;
+        }
+        path.resize(path.size() * 2, L'\0');
+    }
+}
+
 /**
  * @brief Convert Win32 error code to localized message text.
  */
@@ -66,6 +83,19 @@ std::wstring FormatWin32Error(unsigned long errorCode)
 }
 
 } // namespace
+
+std::wstring ResolveExternalExecutablePathForLaunch(const ExternalAppDefinition& app, const std::wstring& modulePath)
+{
+    std::filesystem::path executable(app.executablePath);
+    if (executable.empty()) {
+        return {};
+    }
+    if (executable.is_absolute()) {
+        return executable.lexically_normal().wstring();
+    }
+
+    return (std::filesystem::path(modulePath).parent_path() / executable).lexically_normal().wstring();
+}
 
 Win32ExternalProcessLauncher::~Win32ExternalProcessLauncher()
 {
@@ -109,10 +139,17 @@ ExternalLaunchResult Win32ExternalProcessLauncher::Launch(const ExternalAppDefin
     STARTUPINFOW startupInfo{};
     startupInfo.cb = sizeof(startupInfo);
     PROCESS_INFORMATION processInfo{};
-    std::wstring commandLine = BuildCommandLine(app);
-    const wchar_t* workingDirectory = app.workingDirectory.empty() ? nullptr : app.workingDirectory.c_str();
+    auto launchApp = app;
+    launchApp.executablePath = ResolveExternalExecutablePathForLaunch(app, ModulePath());
+    if (launchApp.executablePath.empty()) {
+        return {app.id, false, false, ERROR_FILE_NOT_FOUND, L"起動対象が未指定です"};
+    }
+    std::wstring commandLine = BuildCommandLine(launchApp);
+    const auto defaultWorkingDirectory = std::filesystem::path(launchApp.executablePath).parent_path().wstring();
+    const std::wstring workingDirectoryText = launchApp.workingDirectory.empty() ? defaultWorkingDirectory : launchApp.workingDirectory;
+    const wchar_t* workingDirectory = workingDirectoryText.empty() ? nullptr : workingDirectoryText.c_str();
 
-    if (CreateProcessW(nullptr,
+    if (CreateProcessW(launchApp.executablePath.c_str(),
                        commandLine.data(),
                        nullptr,
                        nullptr,

@@ -20,6 +20,11 @@ public:
 };
 
 /**
+ * @brief 外部アプリの実行ファイルパスをアプリ本体の配置ディレクトリ基準で絶対化する。
+ */
+std::wstring ResolveExternalExecutablePathForLaunch(const ExternalAppDefinition& app, const std::wstring& modulePath);
+
+/**
  * @brief Win32 API で外部プロセスを起動する実装。
  */
 class Win32ExternalProcessLauncher final : public IExternalProcessLauncher

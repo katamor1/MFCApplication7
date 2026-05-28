@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cwctype>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 /**
@@ -26,28 +27,62 @@ std::wstring ToLower(std::wstring value)
     return value;
 }
 
+std::vector<std::wstring> TokenizeCommandLine(const std::wstring& commandLine)
+{
+    std::vector<std::wstring> tokens;
+    std::wstring current;
+    bool inQuotes = false;
+    for (size_t index = 0; index < commandLine.size(); ++index) {
+        const auto ch = commandLine[index];
+        if (ch == L'\\' && index + 1 < commandLine.size() && commandLine[index + 1] == L'"') {
+            current.push_back(L'"');
+            ++index;
+            continue;
+        }
+        if (ch == L'"') {
+            inQuotes = !inQuotes;
+            continue;
+        }
+        if (!inQuotes && std::iswspace(ch)) {
+            if (!current.empty()) {
+                tokens.push_back(std::move(current));
+                current.clear();
+            }
+            continue;
+        }
+        current.push_back(ch);
+    }
+    if (!current.empty()) {
+        tokens.push_back(std::move(current));
+    }
+    return tokens;
+}
+
 /**
  * @brief Extract /Option: value from command line if present.
  */
 std::wstring OptionValue(const std::wstring& commandLine, const wchar_t* optionName)
 {
-    const std::wstring lowerCommand = ToLower(commandLine);
     const std::wstring lowerOption = ToLower(optionName);
-    const auto optionStart = lowerCommand.find(lowerOption);
-    if (optionStart == std::wstring::npos) {
-        return L"";
+    for (const auto& token : TokenizeCommandLine(commandLine)) {
+        const auto lowerToken = ToLower(token);
+        if (lowerToken.rfind(lowerOption, 0) == 0) {
+            return token.substr(lowerOption.size());
+        }
     }
+    return L"";
+}
 
-    const auto valueStart = optionStart + lowerOption.size();
-    auto valueEnd = commandLine.find(L' ', valueStart);
-    if (valueEnd == std::wstring::npos) {
-        valueEnd = commandLine.size();
+bool HasOption(const std::wstring& commandLine, const wchar_t* optionName)
+{
+    const std::wstring lowerOption = ToLower(optionName);
+    for (const auto& token : TokenizeCommandLine(commandLine)) {
+        const auto lowerToken = ToLower(token);
+        if (lowerToken.rfind(lowerOption, 0) == 0) {
+            return true;
+        }
     }
-    auto value = commandLine.substr(valueStart, valueEnd - valueStart);
-    if (value.size() >= 2 && value.front() == L'"' && value.back() == L'"') {
-        value = value.substr(1, value.size() - 2);
-    }
-    return value;
+    return false;
 }
 
 int NonNegativeOptionValue(const std::wstring& commandLine, const wchar_t* optionName)
@@ -79,16 +114,38 @@ DataCatalog LoadConfiguredCatalogOrDefault(const std::wstring& catalogPath)
     return DataCatalog::CreateDefault();
 }
 
+DataCatalog LoadConfiguredCatalog(const BridgeFactoryOptions& options)
+{
+    if (options.catalogPathExplicit) {
+        if (options.catalogPath.empty()) {
+            throw std::runtime_error("explicit catalog path is empty");
+        }
+        return DataCatalog::LoadFromFile(options.catalogPath);
+    }
+    return LoadConfiguredCatalogOrDefault(options.catalogPath);
+}
+
 /**
  * @brief Instantiate COM or mock bridge according to parsed options.
  */
 std::shared_ptr<IBackendBridge> CreateBackendBridge(const BridgeFactoryOptions& options)
 {
-    const auto catalog = LoadConfiguredCatalogOrDefault(options.catalogPath);
+    const auto catalog = LoadConfiguredCatalog(options);
     if (options.bridgeMode == BridgeMode::Com) {
         return std::make_shared<ComBackendBridge>(options.progId);
     }
     return std::make_shared<MockBackendBridge>(catalog, options.mockLoadProfile, options.mockLatencyOptions);
+}
+
+bool HasCommandLineArgument(const std::wstring& commandLine, const wchar_t* argument)
+{
+    const auto expected = ToLower(argument);
+    for (const auto& token : TokenizeCommandLine(commandLine)) {
+        if (ToLower(token) == expected) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /**
@@ -116,7 +173,8 @@ BridgeFactoryOptions ParseBridgeFactoryOptions(const std::wstring& commandLine)
     }
 
     const auto catalog = OptionValue(commandLine, L"/Catalog:");
-    if (!catalog.empty()) {
+    if (HasOption(commandLine, L"/Catalog:")) {
+        options.catalogPathExplicit = true;
         options.catalogPath = catalog;
     }
 

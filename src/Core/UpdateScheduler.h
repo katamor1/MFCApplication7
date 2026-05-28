@@ -232,6 +232,7 @@ private:
     std::atomic<bool> historyCancelRequested_{false};
     std::atomic<long long> lastWriteStartDelayMs_{-1};
     std::atomic<long long> maxWriteStartDelayMs_{-1};
+    std::atomic<bool> writeLoopReady_{false};
     std::atomic<int> writeStartDelayExceededCount_{0};
     std::atomic<int> writeCompletedCount_{0};
     std::atomic<int> writeErrorCount_{0};

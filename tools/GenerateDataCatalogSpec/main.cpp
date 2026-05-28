@@ -82,9 +82,18 @@ int wmain(int argc, wchar_t** argv)
     try {
         const auto catalog = DataCatalog::LoadFromFile(inputPath);
         const auto markdown = GenerateMarkdown(catalog, inputPath);
-        std::filesystem::create_directories(std::filesystem::path(outputPath).parent_path());
+        const auto outputFile = std::filesystem::path(outputPath);
+        const auto outputDirectory = outputFile.parent_path();
+        if (!outputDirectory.empty()) {
+            std::filesystem::create_directories(outputDirectory);
+        }
         std::ofstream output(outputPath, std::ios::binary);
         output << WideToUtf8(markdown);
+        output.close();
+        if (!output) {
+            std::cerr << "failed to write data catalog spec: output stream error\n";
+            return 2;
+        }
     } catch (const std::exception& ex) {
         std::cerr << "failed to generate data catalog spec: " << ex.what() << '\n';
         return 1;

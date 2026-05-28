@@ -10,6 +10,8 @@
 
 #include <cwctype>
 #include <string>
+#include <utility>
+#include <vector>
 
 class CBackendBridgeMockModule final : public ATL::CAtlExeModuleT<CBackendBridgeMockModule>
 {
@@ -35,12 +37,49 @@ std::wstring ToLower(std::wstring value)
     return value;
 }
 
+std::vector<std::wstring> TokenizeCommandLine(const std::wstring& command)
+{
+    std::vector<std::wstring> tokens;
+    std::wstring current;
+    bool inQuotes = false;
+    for (size_t index = 0; index < command.size(); ++index) {
+        const auto ch = command[index];
+        if (ch == L'\\' && index + 1 < command.size() && command[index + 1] == L'"') {
+            current.push_back(L'"');
+            ++index;
+            continue;
+        }
+        if (ch == L'"') {
+            inQuotes = !inQuotes;
+            continue;
+        }
+        if (!inQuotes && std::iswspace(ch)) {
+            if (!current.empty()) {
+                tokens.push_back(std::move(current));
+                current.clear();
+            }
+            continue;
+        }
+        current.push_back(ch);
+    }
+    if (!current.empty()) {
+        tokens.push_back(std::move(current));
+    }
+    return tokens;
+}
+
 /**
  * @brief Check command line has an argument token.
  */
 bool HasArgument(const std::wstring& command, const wchar_t* argument)
 {
-    return ToLower(command).find(ToLower(argument)) != std::wstring::npos;
+    const auto expected = ToLower(argument);
+    for (const auto& token : TokenizeCommandLine(command)) {
+        if (ToLower(token) == expected) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /**
@@ -482,7 +521,7 @@ OBJECT_ENTRY_AUTO(__uuidof(BackendBridgeComClass), CBackendBridge)
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR commandLine, int showCommand)
 {
     const std::wstring command = commandLine == nullptr ? L"" : commandLine;
-    if (command.find(L"/SelfTest") != std::wstring::npos) {
+    if (HasArgument(command, L"/SelfTest")) {
         return RunSelfTest();
     }
     if (HasArgument(command, L"/RegServer")) {

@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <sstream>
 #include <stdexcept>
@@ -349,6 +351,12 @@ int RequireInt(const JsonValue& object, const char* fieldName)
     if (value.type != JsonValue::Type::Number) {
         throw std::runtime_error(std::string("catalog field must be number: ") + fieldName);
     }
+    if (!std::isfinite(value.number) ||
+        std::floor(value.number) != value.number ||
+        value.number < static_cast<double>(std::numeric_limits<int>::min()) ||
+        value.number > static_cast<double>(std::numeric_limits<int>::max())) {
+        throw std::runtime_error(std::string("catalog field must be integer in int range: ") + fieldName);
+    }
     return static_cast<int>(value.number);
 }
 
@@ -575,6 +583,9 @@ BridgeError DataCatalog::ValidateKey(const DataKey& key) const noexcept
  */
 void DataCatalog::AddDefinition(DataDefinition definition)
 {
+    if (FindDefinition(definition.dataId) != nullptr) {
+        throw std::runtime_error("duplicate catalog dataId: " + std::to_string(definition.dataId));
+    }
     definitions_.push_back(std::move(definition));
 }
 
@@ -583,5 +594,8 @@ void DataCatalog::AddDefinition(DataDefinition definition)
  */
 void DataCatalog::AddCriticalKey(DataKey key)
 {
+    if (std::find(criticalKeys_.begin(), criticalKeys_.end(), key) != criticalKeys_.end()) {
+        throw std::runtime_error("duplicate critical key");
+    }
     criticalKeys_.push_back(key);
 }

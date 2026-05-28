@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <windows.h>
 
 /**
  * @file tests/PerformanceTest/main.cpp
@@ -47,6 +48,23 @@ bool HasArgument(int argc, wchar_t** argv, const wchar_t* argument)
     return false;
 }
 
+std::wstring QuoteArgumentForCommandLine(const std::wstring& argument)
+{
+    if (argument.find_first_of(L" \t\"") == std::wstring::npos) {
+        return argument;
+    }
+
+    std::wstring quoted = L"\"";
+    for (const auto ch : argument) {
+        if (ch == L'"') {
+            quoted += L'\\';
+        }
+        quoted += ch;
+    }
+    quoted += L'"';
+    return quoted;
+}
+
 /**
  * @brief Join command-line arguments for bridge option parsing.
  * @param argc Argument count.
@@ -60,7 +78,7 @@ std::wstring JoinArguments(int argc, wchar_t** argv)
         if (!commandLine.empty()) {
             commandLine += L' ';
         }
-        commandLine += argv[index];
+        commandLine += QuoteArgumentForCommandLine(argv[index]);
     }
     return commandLine;
 }
@@ -81,7 +99,7 @@ int wmain(int argc, wchar_t** argv)
     if (maxLoad && options.bridgeMode == BridgeMode::InProcessMock) {
         options.mockLoadProfile = MockLoadProfile::MaxLoad;
     }
-    const auto catalog = LoadConfiguredCatalogOrDefault(options.catalogPath);
+    const auto catalog = LoadConfiguredCatalog(options);
     auto bridge = CreateBackendBridge(options);
     DataGateway gateway(bridge);
     if (gateway.Connect(options.ipAddress) != BridgeError::Ok) {
@@ -103,6 +121,7 @@ int wmain(int argc, wchar_t** argv)
     coordinator.StartHistoryLoad({3});
     if (maxLoad) {
         scheduleGridThread = std::thread([&] {
+            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
             while (loadRunning.load()) {
                 const auto started = std::chrono::steady_clock::now();
                 const auto grid = BuildScheduleGrid(gateway);
@@ -116,6 +135,7 @@ int wmain(int argc, wchar_t** argv)
             }
         });
         writeProducerThread = std::thread([&] {
+            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
             int sequence = 0;
             while (loadRunning.load()) {
                 ++sequence;
@@ -155,6 +175,7 @@ int wmain(int argc, wchar_t** argv)
                << L"lastWriteStartDelayMs=" << metrics.lastWriteStartDelayMs << L"\n"
                << L"maxWriteStartDelayMs=" << metrics.maxWriteStartDelayMs << L"\n"
                << L"writeStartDelayExceededCount=" << metrics.writeStartDelayExceededCount << L"\n"
+               << L"requestedWrites=" << requestedWrites.load() << L"\n"
                << L"writeCompletedCount=" << metrics.writeCompletedCount << L"\n"
                << L"lastWriteErrorCode=" << static_cast<int>(metrics.lastWriteErrorCode) << L"\n"
                << L"historyReadCount=" << metrics.historyReadCount << L"\n"
@@ -187,8 +208,8 @@ int wmain(int argc, wchar_t** argv)
         std::wcerr << L"write start delay envelope exceeded 100ms\n";
         return 9;
     }
-    if (metrics.writeCompletedCount < 1) {
-        std::wcerr << L"write did not complete\n";
+    if (metrics.writeCompletedCount < requestedWrites.load()) {
+        std::wcerr << L"not all requested writes completed\n";
         return 5;
     }
     if (metrics.lastWriteErrorCode != BridgeError::Ok) {

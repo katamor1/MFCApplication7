@@ -1,6 +1,6 @@
 # データIDカタログ仕様
 
-- Source: `config\data_catalog.json`
+- Source: `config/data_catalog.json`
 - Definitions: 33
 - Critical keys: 20
 

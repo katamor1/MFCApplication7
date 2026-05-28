@@ -3,6 +3,7 @@
 #include "resource.h"
 
 #include <algorithm>
+#include <vector>
 
 namespace {
 
@@ -17,6 +18,22 @@ CString ToCString(const std::wstring& value)
 std::wstring ToWString(const CString& value)
 {
     return std::wstring(value.GetString());
+}
+
+bool SameBinding(const GridRowBinding& left, const GridRowBinding& right)
+{
+    return left.containerNo == right.containerNo &&
+        left.itemNo == right.itemNo &&
+        left.dataId == right.dataId &&
+        left.externalAppId == right.externalAppId;
+}
+
+bool HasStableBinding(const GridRowBinding& binding)
+{
+    return binding.containerNo != 0 ||
+        binding.itemNo != 0 ||
+        binding.dataId != 0 ||
+        !binding.externalAppId.empty();
 }
 
 } // namespace
@@ -135,6 +152,20 @@ CCustomGridCtrl::~CCustomGridCtrl()
  */
 void CCustomGridCtrl::ApplyModel(const GridModel& model)
 {
+    std::vector<GridRowBinding> selectedBindings;
+    std::vector<int> selectedRows;
+    POSITION position = GetFirstSelectedItemPosition();
+    while (position != nullptr) {
+        const int selectedRow = GetNextSelectedItem(position);
+        selectedRows.push_back(selectedRow);
+        if (selectedRow >= 0 && selectedRow < static_cast<int>(model_.Rows().size())) {
+            const auto& binding = model_.Rows()[static_cast<size_t>(selectedRow)].binding;
+            if (HasStableBinding(binding)) {
+                selectedBindings.push_back(binding);
+            }
+        }
+    }
+
     CancelEdit();
     model_ = model;
 
@@ -154,6 +185,19 @@ void CCustomGridCtrl::ApplyModel(const GridModel& model)
         InsertItem(row, ToCString(cells[0].text));
         for (int column = 1; column < static_cast<int>(cells.size()); ++column) {
             SetItemText(row, column, ToCString(cells[column].text));
+        }
+    }
+
+    for (int row = 0; row < static_cast<int>(model_.Rows().size()); ++row) {
+        const auto& binding = model_.Rows()[static_cast<size_t>(row)].binding;
+        const bool bindingMatched = HasStableBinding(binding) &&
+            std::any_of(selectedBindings.begin(), selectedBindings.end(), [&](const GridRowBinding& selected) {
+                return SameBinding(selected, binding);
+            });
+        const bool rowMatched = selectedBindings.empty() &&
+            std::find(selectedRows.begin(), selectedRows.end(), row) != selectedRows.end();
+        if (bindingMatched || rowMatched) {
+            SetItemState(row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
         }
     }
 }

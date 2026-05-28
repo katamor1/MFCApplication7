@@ -107,7 +107,7 @@ END_MESSAGE_MAP()
  */
 CMainDialog::CMainDialog(BridgeFactoryOptions options)
     : CDialogEx(IDD_MFCAPPLICATION7_DIALOG)
-    , catalog_(LoadConfiguredCatalogOrDefault(options.catalogPath))
+    , catalog_(LoadConfiguredCatalog(options))
     , bridgeOptions_(std::move(options))
     , bridge_(CreateBackendBridge(bridgeOptions_))
     , navItems_(BuildDefaultNavigationItems())

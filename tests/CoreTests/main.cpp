@@ -108,6 +108,42 @@ void TestCatalogRejectsUnknownStyleName()
 }
 
 /**
+ * @brief Verify numeric catalog fields must be integer values.
+ */
+void TestCatalogRejectsNonIntegerNumbers()
+{
+    bool failed = false;
+    try {
+        DataCatalog::LoadFromFile(L"tests/CoreTests/invalid_decimal_catalog.json");
+    } catch (const std::exception&) {
+        failed = true;
+    }
+    Check(failed, "decimal catalog dataId should throw");
+}
+
+/**
+ * @brief Verify duplicate definitions and critical keys are rejected.
+ */
+void TestCatalogRejectsDuplicateDefinitionsAndCriticalKeys()
+{
+    bool duplicateDefinitionFailed = false;
+    try {
+        DataCatalog::LoadFromFile(L"tests/CoreTests/duplicate_data_catalog.json");
+    } catch (const std::exception&) {
+        duplicateDefinitionFailed = true;
+    }
+    Check(duplicateDefinitionFailed, "duplicate catalog dataId should throw");
+
+    bool duplicateCriticalFailed = false;
+    try {
+        DataCatalog::LoadFromFile(L"tests/CoreTests/duplicate_critical_catalog.json");
+    } catch (const std::exception&) {
+        duplicateCriticalFailed = true;
+    }
+    Check(duplicateCriticalFailed, "duplicate critical key should throw");
+}
+
+/**
  * @brief Verify factory options create a usable in-process mock bridge.
  */
 void TestBridgeFactoryCreatesMockBridge()
@@ -135,6 +171,51 @@ void TestBridgeFactoryParsesMockLoadAndLatencyOptions()
     Check(options.mockLatencyOptions.normalReadDelayMs == 2, "normal delay should parse");
     Check(options.mockLatencyOptions.historyReadDelayMs == 3, "history delay should parse");
     Check(options.mockLatencyOptions.writeDelayMs == 4, "write delay should parse");
+}
+
+/**
+ * @brief Verify startup flags are matched as full command-line tokens.
+ */
+void TestCommandLineArgumentMatchingUsesWholeTokens()
+{
+    Check(HasCommandLineArgument(L"/SelfTest /Bridge:Mock", L"/SelfTest"), "self-test token should match exactly");
+    Check(HasCommandLineArgument(L"/selftest /Bridge:Mock", L"/SelfTest"), "argument matching should be case-insensitive");
+    Check(!HasCommandLineArgument(L"/SelfTestX /Bridge:Mock", L"/SelfTest"), "argument matching should reject prefix collisions");
+    Check(!HasCommandLineArgument(L"/Note:\"/SelfTest\" /Bridge:Mock", L"/SelfTest"), "argument matching should ignore values that merely contain the token");
+}
+
+/**
+ * @brief Verify quoted option values survive spaces and surrounding quotes.
+ */
+void TestBridgeFactoryParsesQuotedOptionValuesWithSpaces()
+{
+    const auto options = ParseBridgeFactoryOptions(
+        L"/Bridge:Com /ProgId:\"MFCApplication7.Mock Server\" /Ip:\"10.0.0.5\" /Catalog:\"C:\\Program Files\\MFCApplication7\\data catalog.json\"");
+
+    Check(options.bridgeMode == BridgeMode::Com, "quoted bridge mode command line should still parse");
+    Check(options.progId == L"MFCApplication7.Mock Server", "quoted progId should preserve spaces");
+    Check(options.ipAddress == L"10.0.0.5", "quoted ip should parse");
+    Check(options.catalogPath == L"C:\\Program Files\\MFCApplication7\\data catalog.json", "quoted catalog path should preserve spaces");
+
+    const auto escaped = ParseBridgeFactoryOptions(L"/ProgId:\"MFCApplication7 \\\"Mock\\\" Server\"");
+    Check(escaped.progId == L"MFCApplication7 \"Mock\" Server", "escaped quotes should survive tokenization");
+}
+
+/**
+ * @brief Verify an explicitly requested catalog path never falls back silently.
+ */
+void TestExplicitCatalogLoadFailureDoesNotFallback()
+{
+    const auto options = ParseBridgeFactoryOptions(L"/Bridge:Mock /Catalog:tests/CoreTests/missing_catalog.json");
+    Check(options.catalogPathExplicit, "catalog path should be marked explicit");
+
+    bool failed = false;
+    try {
+        LoadConfiguredCatalog(options);
+    } catch (const std::exception&) {
+        failed = true;
+    }
+    Check(failed, "explicit missing catalog should throw");
 }
 
 /**
@@ -938,6 +1019,29 @@ void TestUpdateCoordinatorRecordsWriteDelayEnvelope()
 }
 
 /**
+ * @brief Verify stop drains queued user writes instead of silently dropping them.
+ */
+void TestUpdateCoordinatorDrainsQueuedWritesOnStop()
+{
+    auto catalog = DataCatalog::CreateDefault();
+    MockLatencyOptions latency;
+    latency.writeDelayMs = 50;
+    auto bridge = std::make_shared<MockBackendBridge>(catalog, MockLoadProfile::Default, latency);
+    DataGateway gateway(bridge);
+    Check(gateway.Connect(L"127.0.0.1") == BridgeError::Ok, "gateway connect should succeed");
+
+    UpdateCoordinator coordinator(catalog, gateway);
+    coordinator.Start();
+    coordinator.RequestWrite({2103, 1, 1, DataStyle::Raw}, L"1111");
+    coordinator.RequestWrite({2103, 1, 2, DataStyle::Raw}, L"2222");
+    coordinator.Stop();
+
+    const auto metrics = coordinator.Metrics();
+    Check(metrics.writeCompletedCount == 2, "stop should drain queued writes");
+    Check(metrics.lastWriteErrorCode == BridgeError::Ok, "drained writes should succeed");
+}
+
+/**
  * @brief Verify critical timing metrics are recorded while background work runs.
  */
 void TestCriticalTimingMetricsAreRecorded()
@@ -1458,8 +1562,13 @@ int wmain()
         TestCatalogLoadsFromJsonFile,
         TestCatalogRejectsInvalidJsonFile,
         TestCatalogRejectsUnknownStyleName,
+        TestCatalogRejectsNonIntegerNumbers,
+        TestCatalogRejectsDuplicateDefinitionsAndCriticalKeys,
         TestBridgeFactoryCreatesMockBridge,
         TestBridgeFactoryParsesMockLoadAndLatencyOptions,
+        TestCommandLineArgumentMatchingUsesWholeTokens,
+        TestBridgeFactoryParsesQuotedOptionValuesWithSpaces,
+        TestExplicitCatalogLoadFailureDoesNotFallback,
         TestMockBridgeFormatsValuesAndRejectsInvalidStyle,
         TestMockMaxLoadProfileBuildsThousandScheduleRows,
         TestGatewayMarksErrorsAsStale,
@@ -1492,6 +1601,7 @@ int wmain()
         TestUpdateCoordinatorRecordsReadOnlyWriteError,
         TestUpdateCoordinatorRecordsScheduleMutationMetrics,
         TestUpdateCoordinatorRecordsWriteDelayEnvelope,
+        TestUpdateCoordinatorDrainsQueuedWritesOnStop,
         TestCriticalTimingMetricsAreRecorded,
         TestUpdateCoordinatorCancelsHistoryLoad,
         TestUpdateCoordinatorCapsHistoryRecords,

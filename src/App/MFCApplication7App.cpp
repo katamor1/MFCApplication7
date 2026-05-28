@@ -27,17 +27,6 @@ CMFCApplication7App theApp;
 namespace {
 
 /**
- * @brief Check whether command line contains a specific argument token.
- * @param commandLine Raw argument string.
- * @param argument Target token.
- * @return true if token appears in commandLine.
- */
-bool HasArgument(const std::wstring& commandLine, const wchar_t* argument)
-{
-    return commandLine.find(argument) != std::wstring::npos;
-}
-
-/**
  * @brief Poll until completed write count reaches the expected number.
  */
 bool WaitForWriteCount(const UpdateCoordinator& coordinator, int expectedCount)
@@ -160,7 +149,7 @@ bool WaitForNormalCycles(const UpdateCoordinator& coordinator)
  */
 int RunWriteSmoke(const BridgeFactoryOptions& options)
 {
-    const auto catalog = LoadConfiguredCatalogOrDefault(options.catalogPath);
+    const auto catalog = LoadConfiguredCatalog(options);
     auto bridge = CreateBackendBridge(options);
     DataGateway gateway(bridge);
     if (gateway.Connect(options.ipAddress) != BridgeError::Ok) {
@@ -196,7 +185,7 @@ int RunWriteSmoke(const BridgeFactoryOptions& options)
  */
 int RunHistorySmoke(const BridgeFactoryOptions& options)
 {
-    const auto catalog = LoadConfiguredCatalogOrDefault(options.catalogPath);
+    const auto catalog = LoadConfiguredCatalog(options);
     auto bridge = CreateBackendBridge(options);
     DataGateway gateway(bridge);
     if (gateway.Connect(options.ipAddress) != BridgeError::Ok) {
@@ -247,7 +236,7 @@ int RunHistorySmoke(const BridgeFactoryOptions& options)
  */
 int RunScheduleMutationSmoke(const BridgeFactoryOptions& options)
 {
-    const auto catalog = LoadConfiguredCatalogOrDefault(options.catalogPath);
+    const auto catalog = LoadConfiguredCatalog(options);
     auto bridge = CreateBackendBridge(options);
     DataGateway gateway(bridge);
     if (gateway.Connect(options.ipAddress) != BridgeError::Ok) {
@@ -296,7 +285,7 @@ int RunScheduleMutationSmoke(const BridgeFactoryOptions& options)
  */
 int RunStatusSmoke(const BridgeFactoryOptions& options)
 {
-    const auto catalog = LoadConfiguredCatalogOrDefault(options.catalogPath);
+    const auto catalog = LoadConfiguredCatalog(options);
     auto bridge = CreateBackendBridge(options);
     DataGateway gateway(bridge);
     if (gateway.Connect(options.ipAddress) != BridgeError::Ok) {
@@ -440,7 +429,7 @@ int RunContainerListLayoutSmoke(const BridgeFactoryOptions& options)
  */
 int RunMaintenanceDetailSmoke(const BridgeFactoryOptions& options)
 {
-    const auto catalog = LoadConfiguredCatalogOrDefault(options.catalogPath);
+    const auto catalog = LoadConfiguredCatalog(options);
     auto bridge = CreateBackendBridge(options);
     DataGateway gateway(bridge);
     if (gateway.Connect(options.ipAddress) != BridgeError::Ok) {
@@ -541,7 +530,7 @@ int RunMaxLoadSmoke(const BridgeFactoryOptions& options)
         maxOptions.mockLoadProfile = MockLoadProfile::MaxLoad;
     }
 
-    const auto catalog = LoadConfiguredCatalogOrDefault(maxOptions.catalogPath);
+    const auto catalog = LoadConfiguredCatalog(maxOptions);
     auto bridge = CreateBackendBridge(maxOptions);
     DataGateway gateway(bridge);
     if (gateway.Connect(maxOptions.ipAddress) != BridgeError::Ok) {
@@ -617,6 +606,26 @@ int RunGridEditSmoke()
     }
     grid.SetExtendedStyle(LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
 
+    GridModel plainModel;
+    plainModel.SetColumns({L"Name"});
+    plainModel.AddRow({GridCell::Text(L"one")});
+    plainModel.AddRow({GridCell::Text(L"two")});
+    grid.ApplyModel(plainModel);
+    grid.SetItemState(1, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    grid.ApplyModel(plainModel);
+    POSITION plainSelection = grid.GetFirstSelectedItemPosition();
+    int plainSelectedRow = -1;
+    int plainSelectedCount = 0;
+    while (plainSelection != nullptr) {
+        plainSelectedRow = grid.GetNextSelectedItem(plainSelection);
+        ++plainSelectedCount;
+    }
+    if (plainSelectedCount != 1 || plainSelectedRow != 1) {
+        grid.DestroyWindow();
+        parent.DestroyWindow();
+        return 914;
+    }
+
     GridModel model;
     model.SetColumns({L"Text", L"Spin", L"Combo", L"Radio", L"Check"});
     model.AddRow({GridCell::Text(L"alpha", CellKind::Text),
@@ -626,6 +635,14 @@ int RunGridEditSmoke()
                   GridCell::Text(L"false", CellKind::CheckBox)},
                  {7, 8, 9});
     grid.ApplyModel(model);
+    grid.SetItemState(0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    grid.ApplyModel(model);
+    POSITION selection = grid.GetFirstSelectedItemPosition();
+    if (selection == nullptr || grid.GetNextSelectedItem(selection) != 0) {
+        grid.DestroyWindow();
+        parent.DestroyWindow();
+        return 915;
+    }
 
     if (grid.BeginEditCell(0, 0)) {
         parent.DestroyWindow();
@@ -781,7 +798,7 @@ int RunNavigationSmoke()
  */
 int RunScheduleOrderSmoke(const BridgeFactoryOptions& options)
 {
-    const auto catalog = LoadConfiguredCatalogOrDefault(options.catalogPath);
+    const auto catalog = LoadConfiguredCatalog(options);
     auto bridge = CreateBackendBridge(options);
     DataGateway gateway(bridge);
     if (gateway.Connect(options.ipAddress) != BridgeError::Ok) {
@@ -843,7 +860,7 @@ int RunScheduleOrderSmoke(const BridgeFactoryOptions& options)
  */
 int RunScheduleGridEditSmoke(const BridgeFactoryOptions& options)
 {
-    const auto catalog = LoadConfiguredCatalogOrDefault(options.catalogPath);
+    const auto catalog = LoadConfiguredCatalog(options);
     auto bridge = CreateBackendBridge(options);
     DataGateway gateway(bridge);
     if (gateway.Connect(options.ipAddress) != BridgeError::Ok) {
@@ -986,7 +1003,7 @@ int RunScheduleGridEditSmoke(const BridgeFactoryOptions& options)
  */
 int RunScheduleUndoSmoke(const BridgeFactoryOptions& options)
 {
-    const auto catalog = LoadConfiguredCatalogOrDefault(options.catalogPath);
+    const auto catalog = LoadConfiguredCatalog(options);
     auto bridge = CreateBackendBridge(options);
     DataGateway gateway(bridge);
     if (gateway.Connect(options.ipAddress) != BridgeError::Ok) {
@@ -1136,6 +1153,12 @@ int RunExternalLaunchSmoke()
     if (apps.size() != 1 || apps[0].id != L"container-controller") {
         return 1200;
     }
+    const auto resolvedPath = ResolveExternalExecutablePathForLaunch(
+        apps[0],
+        L"C:\\Program Files\\MFCApplication7\\MFCApplication7.exe");
+    if (resolvedPath != L"C:\\Program Files\\MFCApplication7\\ContainerController.exe") {
+        return 1205;
+    }
 
     FakeExternalProcessLauncher launcher;
     const auto first = launcher.Launch(apps[0]);
@@ -1274,23 +1297,23 @@ BOOL CMFCApplication7App::InitInstance()
 
     const std::wstring commandLine = m_lpCmdLine == nullptr ? L"" : std::wstring(m_lpCmdLine);
     const auto bridgeOptions = ParseBridgeFactoryOptions(commandLine);
-    if (HasArgument(commandLine, L"/SelfTest")) {
+    if (HasCommandLineArgument(commandLine, L"/SelfTest")) {
         ::ExitProcess(static_cast<UINT>(RunSelfTest(bridgeOptions,
-                                                    HasArgument(commandLine, L"/WriteSmoke"),
-                                                    HasArgument(commandLine, L"/HistorySmoke"),
-                                                    HasArgument(commandLine, L"/ScheduleMutationSmoke"),
-                                                    HasArgument(commandLine, L"/ScheduleOrderSmoke"),
-                                                    HasArgument(commandLine, L"/StatusSmoke"),
-                                                    HasArgument(commandLine, L"/StationLayoutSmoke"),
-                                                    HasArgument(commandLine, L"/ContainerListLayoutSmoke"),
-                                                    HasArgument(commandLine, L"/MaintenanceDetailSmoke"),
-                                                    HasArgument(commandLine, L"/DetailSmoke"),
-                                                    HasArgument(commandLine, L"/GridEditSmoke"),
-                                                    HasArgument(commandLine, L"/ScheduleGridEditSmoke"),
-                                                    HasArgument(commandLine, L"/ScheduleUndoSmoke"),
-                                                    HasArgument(commandLine, L"/NavigationSmoke"),
-                                                    HasArgument(commandLine, L"/MaxLoadSmoke"),
-                                                    HasArgument(commandLine, L"/ExternalLaunchSmoke"))));
+                                                    HasCommandLineArgument(commandLine, L"/WriteSmoke"),
+                                                    HasCommandLineArgument(commandLine, L"/HistorySmoke"),
+                                                    HasCommandLineArgument(commandLine, L"/ScheduleMutationSmoke"),
+                                                    HasCommandLineArgument(commandLine, L"/ScheduleOrderSmoke"),
+                                                    HasCommandLineArgument(commandLine, L"/StatusSmoke"),
+                                                    HasCommandLineArgument(commandLine, L"/StationLayoutSmoke"),
+                                                    HasCommandLineArgument(commandLine, L"/ContainerListLayoutSmoke"),
+                                                    HasCommandLineArgument(commandLine, L"/MaintenanceDetailSmoke"),
+                                                    HasCommandLineArgument(commandLine, L"/DetailSmoke"),
+                                                    HasCommandLineArgument(commandLine, L"/GridEditSmoke"),
+                                                    HasCommandLineArgument(commandLine, L"/ScheduleGridEditSmoke"),
+                                                    HasCommandLineArgument(commandLine, L"/ScheduleUndoSmoke"),
+                                                    HasCommandLineArgument(commandLine, L"/NavigationSmoke"),
+                                                    HasCommandLineArgument(commandLine, L"/MaxLoadSmoke"),
+                                                    HasCommandLineArgument(commandLine, L"/ExternalLaunchSmoke"))));
     }
 
     CMainDialog dialog(bridgeOptions);

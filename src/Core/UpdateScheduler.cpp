@@ -155,10 +155,14 @@ void UpdateCoordinator::Start()
     if (running_.exchange(true)) {
         return;
     }
+    writeLoopReady_ = false;
 
     criticalThread_ = std::thread(&UpdateCoordinator::CriticalLoop, this);
     normalThread_ = std::thread(&UpdateCoordinator::NormalLoop, this);
     writeThread_ = std::thread(&UpdateCoordinator::WriteLoop, this);
+    for (int attempt = 0; attempt < 100 && !writeLoopReady_.load(); ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
 }
 
 /**
@@ -367,7 +371,9 @@ void UpdateCoordinator::NormalLoop()
  */
 void UpdateCoordinator::WriteLoop()
 {
-    while (running_) {
+    writeLoopReady_ = true;
+    writeCv_.notify_all();
+    while (true) {
         WriteRequest request;
         {
             std::unique_lock<std::mutex> lock(writeMutex_);

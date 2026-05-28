@@ -25,6 +25,8 @@ struct BridgeFactoryOptions
     std::wstring ipAddress{L"127.0.0.1"};
     /** @brief データカタログ JSON のパス。 */
     std::wstring catalogPath{L"config/data_catalog.json"};
+    /** @brief カタログパスがコマンドラインで明示指定されたか。 */
+    bool catalogPathExplicit{false};
     /** @brief インプロセスモックの負荷プロファイル。 */
     MockLoadProfile mockLoadProfile{MockLoadProfile::Default};
     /** @brief インプロセスモックの遅延注入設定。 */
@@ -37,9 +39,19 @@ struct BridgeFactoryOptions
 DataCatalog LoadConfiguredCatalogOrDefault(const std::wstring& catalogPath);
 
 /**
+ * @brief 起動オプションに従ってカタログを読み込む。明示指定パスの失敗は例外で通知する。
+ */
+DataCatalog LoadConfiguredCatalog(const BridgeFactoryOptions& options);
+
+/**
  * @brief 起動オプションからバックエンドブリッジ実装を構築する。
  */
 std::shared_ptr<IBackendBridge> CreateBackendBridge(const BridgeFactoryOptions& options);
+
+/**
+ * @brief コマンドラインに指定トークンが完全一致で含まれるかを返す。
+ */
+bool HasCommandLineArgument(const std::wstring& commandLine, const wchar_t* argument);
 
 /**
  * @brief コマンドラインから起動オプションを解釈する。

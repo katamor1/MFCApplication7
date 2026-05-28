@@ -1,0 +1,7 @@
+{
+  "definitions": [
+    {"dataId": 2103, "name": "first", "writable": true, "subId1": {"min": 1, "max": 100}, "subId2": {"min": 1, "max": 1000}, "styles": ["raw"]},
+    {"dataId": 2103, "name": "second", "writable": false, "subId1": {"min": 1, "max": 100}, "subId2": {"min": 1, "max": 1000}, "styles": ["raw"]}
+  ],
+  "criticalKeys": []
+}

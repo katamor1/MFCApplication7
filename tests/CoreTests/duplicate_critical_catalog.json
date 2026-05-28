@@ -1,0 +1,9 @@
+{
+  "definitions": [
+    {"dataId": 1000, "name": "critical", "writable": false, "subId1": {"min": 0, "max": 0}, "subId2": {"min": 0, "max": 0}, "styles": ["raw"]}
+  ],
+  "criticalKeys": [
+    {"dataId": 1000, "subId1": 0, "subId2": 0, "style": "raw"},
+    {"dataId": 1000, "subId1": 0, "subId2": 0, "style": "raw"}
+  ]
+}
